@@ -2,14 +2,16 @@ name: V2Ray Subscription Aggregator
 
 on:
   schedule:
-    # 每天中午12:00 (UTC+8) = UTC 04:00
+    # 每天中午12:00 和 晚上22:00 (UTC+8) 各执行一次
     - cron: '0 4 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch:  # 支持手动触发
 
 jobs:
   aggregate:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 30
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,8 +24,21 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run aggregator
-        run: python v2ray_aggregator.py --top 10 --workers 50 --ping-count 5
+      - name: Cache xray-core binary
+        uses: actions/cache@v4
+        with:
+          path: .xray
+          key: xray-core-v1.8.24-linux-64
+
+      - name: Run aggregator (两阶段测速：TCP/TLS初筛 + xray真实代理验证)
+        run: |
+          python v2ray_aggregator.py \
+            --top 10 \
+            --workers 30 \
+            --ping-count 3 \
+            --rounds 2 \
+            --xray-candidates 30 \
+            --verbose
 
       - name: Commit and push results
         run: |
