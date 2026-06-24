@@ -1,0 +1,55 @@
+{
+  "generated_at": "2026-06-24T21:55:01.974848",
+  "total_sources": 1,
+  "total_nodes_parsed": 157,
+  "unique_nodes": 128,
+  "tested_nodes": 128,
+  "selected_nodes": 5,
+  "best_nodes": [
+    {
+      "rank": 1,
+      "protocol": "vless",
+      "address": "140.245.101.81",
+      "port": 443,
+      "name": "SG新加坡(mibei77.com 米贝节点分享)",
+      "avg_latency_ms": 3.6,
+      "loss_rate": 0.0
+    },
+    {
+      "rank": 2,
+      "protocol": "vless",
+      "address": "151.101.26.151",
+      "port": 80,
+      "name": "US美国(mibei77.com 米贝节点分享)",
+      "avg_latency_ms": 3.8,
+      "loss_rate": 0.0
+    },
+    {
+      "rank": 3,
+      "protocol": "vless",
+      "address": "167.82.0.1",
+      "port": 80,
+      "name": "DE德国(mibei77.com 米贝节点分享)",
+      "avg_latency_ms": 3.9,
+      "loss_rate": 0.0
+    },
+    {
+      "rank": 4,
+      "protocol": "vless",
+      "address": "151.101.214.151",
+      "port": 80,
+      "name": "US美国(mibei77.com 米贝节点分享)",
+      "avg_latency_ms": 3.9,
+      "loss_rate": 0.0
+    },
+    {
+      "rank": 5,
+      "protocol": "ss",
+      "address": "153.76.112.64",
+      "port": 1080,
+      "name": "DE德国(mibei77.com 米贝节点分享)",
+      "avg_latency_ms": 4.6,
+      "loss_rate": 0.0
+    }
+  ]
+}
