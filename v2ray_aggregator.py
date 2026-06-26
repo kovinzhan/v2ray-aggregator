@@ -64,7 +64,7 @@ TEST_CONFIG = {
     "xray_test_count": 3,       # 每个节点通过代理请求次数
     "xray_test_timeout": 10,    # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
-    "xray_candidate_count": 30, # 初筛后进入 xray 测试的候选节点数
+    "xray_candidate_count": 50, # 初筛后进入 xray 测试的候选节点数（免费节点可用率低，需要多候选）
     "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
     "xray_test_url": "http://www.gstatic.com/generate_204",  # 连通性检测 URL
 }
@@ -872,24 +872,42 @@ def build_xray_multi_config(nodes_with_ports):
 
 def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
     """
-    通过已启动的 xray 代理端口测试单个节点的延迟
-    （不负责管理 xray 进程，只发 HTTP 请求）
+    通过已启动的 xray 代理端口测试单个节点的真实可用性
+    多维度验证：
+    1. generate_204 快速连通性检测
+    2. 实际网页内容下载验证（确保不是被劫持/拦截）
+    3. 多次重复测试确保稳定性
     """
     proxy = f"socks5h://127.0.0.1:{socks_port}"
-    test_url = TEST_CONFIG.get("xray_test_url", "http://www.gstatic.com/generate_204")
-    latencies = []
 
+    # 多个测试 URL，按优先级排列
+    # 第一类：快速连通性（轻量）
+    quick_urls = [
+        ("http://www.gstatic.com/generate_204", 204, None),         # Google 204
+        ("http://cp.cloudflare.com/", 200, None),                    # Cloudflare 连通测试
+    ]
+    # 第二类：内容可达性验证（确认能真正访问外网内容）
+    content_urls = [
+        ("https://www.google.com/robots.txt", 200, "User-agent"),    # Google robots.txt 必须含 User-agent
+        ("https://www.cloudflare.com/cdn-cgi/trace", 200, "warp="),  # Cloudflare trace 必须含 warp=
+    ]
+
+    latencies = []      # 所有成功请求的延迟
+    content_ok = False  # 是否通过内容验证
+
+    # ---- 阶段 1: 快速连通性测试 ----
     for i in range(test_count):
+        url, expected_code, _ = quick_urls[i % len(quick_urls)]
         try:
             start = time.time()
             resp = requests.get(
-                test_url,
+                url,
                 proxies={"http": proxy, "https": proxy},
                 timeout=timeout,
                 headers=HEADERS,
             )
             elapsed = (time.time() - start) * 1000
-            if resp.status_code in (200, 204):
+            if resp.status_code == expected_code or resp.status_code in (200, 204):
                 latencies.append(elapsed)
             else:
                 latencies.append(None)
@@ -897,29 +915,66 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
             latencies.append(None)
 
         if i < test_count - 1:
-            time.sleep(0.5)
+            time.sleep(0.3)
 
-    successes = [l for l in latencies if l is not None]
-    if successes:
-        avg = statistics.mean(successes)
-        jitter = statistics.stdev(successes) if len(successes) > 1 else 0
-        return {
-            **node,
-            "xray_ok": True,
-            "xray_avg_ms": round(avg, 1),
-            "xray_min_ms": round(min(successes), 1),
-            "xray_max_ms": round(max(successes), 1),
-            "xray_jitter_ms": round(jitter, 1),
-            "xray_success": len(successes),
-            "xray_total": test_count,
-            "xray_latencies": [round(l, 1) if l else None for l in latencies],
-            "xray_error": "",
-        }
-    else:
+    # 快速连通都失败了，直接返回
+    quick_successes = [l for l in latencies if l is not None]
+    if not quick_successes:
         return {
             **node, "xray_ok": False, "xray_avg_ms": float("inf"),
-            "xray_latencies": latencies, "xray_error": "all_requests_failed",
+            "xray_latencies": latencies, "xray_error": "quick_check_all_failed",
         }
+
+    # ---- 阶段 2: 内容可达性验证（至少通过一个） ----
+    content_latencies = []
+    for url, expected_code, expected_content in content_urls:
+        try:
+            start = time.time()
+            resp = requests.get(
+                url,
+                proxies={"http": proxy, "https": proxy},
+                timeout=timeout,
+                headers=HEADERS,
+            )
+            elapsed = (time.time() - start) * 1000
+            if resp.status_code == expected_code:
+                body = resp.text[:2000]
+                if expected_content and expected_content in body:
+                    content_ok = True
+                    content_latencies.append(elapsed)
+                    break  # 通过一个即可
+                elif not expected_content:
+                    content_ok = True
+                    content_latencies.append(elapsed)
+                    break
+        except Exception:
+            continue
+
+    if not content_ok:
+        return {
+            **node, "xray_ok": False, "xray_avg_ms": float("inf"),
+            "xray_latencies": latencies,
+            "xray_error": "content_verify_failed",
+        }
+
+    # 合并所有延迟
+    all_latencies = quick_successes + content_latencies
+    avg = statistics.mean(all_latencies)
+    jitter = statistics.stdev(all_latencies) if len(all_latencies) > 1 else 0
+
+    return {
+        **node,
+        "xray_ok": True,
+        "xray_avg_ms": round(avg, 1),
+        "xray_min_ms": round(min(all_latencies), 1),
+        "xray_max_ms": round(max(all_latencies), 1),
+        "xray_jitter_ms": round(jitter, 1),
+        "xray_success": len(all_latencies),
+        "xray_total": test_count + 1,  # quick tests + content test
+        "xray_latencies": [round(l, 1) if l else None for l in latencies] + [round(l, 1) for l in content_latencies],
+        "xray_error": "",
+        "content_verified": True,
+    }
 
 
 def batch_xray_test(xray_bin, candidate_nodes):
@@ -1069,9 +1124,10 @@ def batch_xray_test(xray_bin, candidate_nodes):
                     avg = result.get("xray_avg_ms", "∞")
                     err = result.get("xray_error", "")
                     name = result.get("name", "")[:20]
+                    verified = " [内容验证✓]" if result.get("content_verified") else ""
                     logger.info(
                         f"  [{done_count}/{len(testable)}] {status} {node['address']}:{node['port']} "
-                        f"→ {avg}ms {f'({err})' if err else ''} {name}"
+                        f"→ {avg}ms {f'({err})' if err else ''}{verified} {name}"
                     )
                 except Exception as e:
                     results.append({
@@ -1289,12 +1345,19 @@ def main():
                     max_latency=TEST_CONFIG["max_latency_ms"],
                     max_loss=1.0,  # xray 已经验证过可用，放宽丢包限制
                 )
+                logger.info(f"  ✓ 经 xray 真实代理验证可用: {len(best_nodes)} 个节点")
             else:
-                logger.warning("xray 测试全部失败，回退使用初筛结果")
-                best_nodes = preliminary_best[:TEST_CONFIG["top_n"]]
+                logger.warning("=" * 60)
+                logger.warning("xray 真实代理测试全部失败！")
+                logger.warning("这意味着所有候选节点虽然 tcping 可通，但实际无法代理上网。")
+                logger.warning("可能原因：节点已过期/被封/免费节点不可用")
+                logger.warning("=" * 60)
+                # 不再回退到初筛结果，输出空列表比输出不可用节点更诚实
+                best_nodes = []
 
         except Exception as e:
-            logger.error(f"xray-core 测速失败: {e}，回退使用初筛结果")
+            logger.error(f"xray-core 测速失败: {e}")
+            logger.warning("xray 测试异常，回退使用初筛结果（仅供参考，可能不可用）")
             best_nodes = preliminary_best[:TEST_CONFIG["top_n"]]
     else:
         if not TEST_CONFIG.get("xray_enabled", True):
@@ -1302,9 +1365,9 @@ def main():
         best_nodes = preliminary_best[:TEST_CONFIG["top_n"]]
 
     if not best_nodes:
-        logger.warning("未筛选到可用节点")
-        test_results.sort(key=lambda x: x["avg_latency_ms"])
-        best_nodes = test_results[:TEST_CONFIG["top_n"]]
+        logger.warning("未筛选到任何可用节点！")
+        logger.warning("所有节点均无法通过真实代理验证，本次不输出无效节点。")
+        # 仍然生成空的订阅文件和报告，但不含无效节点
 
     # 输出结果
     xray_mode = TEST_CONFIG.get("xray_enabled", True)
@@ -1381,6 +1444,7 @@ def main():
                 "loss_rate": n.get("loss_rate", 0),
                 "is_cdn": n.get("is_cdn", False),
                 "xray_ok": n.get("xray_ok", None),
+                "content_verified": n.get("content_verified", False),
                 "stability": n.get("stability", "?"),
                 "score": n.get("score", 0),
             }
