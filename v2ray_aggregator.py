@@ -17,7 +17,6 @@ import socket
 import signal
 import logging
 import zipfile
-import tarfile
 import argparse
 import platform
 import tempfile
@@ -28,6 +27,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
+import sources as source_module
+
 try:
     import requests
 except ImportError:
@@ -37,15 +38,6 @@ except ImportError:
 # ============================================================
 # 配置
 # ============================================================
-
-# 订阅源列表（可自行添加更多）
-SUBSCRIBE_URLS = [
-    # 米贝分享（动态获取，每日更新）
-    {"name": "mibei77", "type": "dynamic", "category_url": "https://www.mibei77.com/category/jiedian"},
-    # 以下为示例静态订阅源，替换为你实际收集到的链接
-    # {"name": "source2", "type": "static", "url": "https://example.com/sub.txt"},
-    # {"name": "source3", "type": "static", "url": "https://example.com/sub2.txt"},
-]
 
 # 测速配置
 TEST_CONFIG = {
@@ -64,7 +56,6 @@ TEST_CONFIG = {
     "xray_test_timeout": 10,    # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
     "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
-    "xray_test_url": "http://www.gstatic.com/generate_204",  # 连通性检测 URL
 }
 
 # HTTP 请求头
@@ -85,61 +76,8 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# 第一步：多源采集
+# 第一步：多源采集（实现在 sources/ 模块中，每个源一个文件）
 # ============================================================
-
-def fetch_mibei77_dynamic():
-    """动态获取米贝分享当日订阅链接内容"""
-    category_url = "https://www.mibei77.com/category/jiedian"
-    resp = requests.get(category_url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-
-    # 提取最新帖子链接
-    matches = re.findall(r'href="(https://www\.mibei77\.com/\d+\.html)"', resp.text)
-    if not matches:
-        raise Exception("米贝分享：未找到帖子链接")
-
-    post_url = matches[0]
-    resp2 = requests.get(post_url, headers=HEADERS, timeout=30)
-    resp2.raise_for_status()
-
-    # 提取 v2ray 订阅链接
-    v2ray_links = re.findall(r'(https://mm\.mibei77\.com/[^\s<"\']+\.txt)', resp2.text)
-    if not v2ray_links:
-        raise Exception("米贝分享：未找到订阅链接")
-
-    # 下载订阅内容
-    sub_resp = requests.get(v2ray_links[0], headers=HEADERS, timeout=30)
-    sub_resp.raise_for_status()
-    return sub_resp.text.strip()
-
-
-def fetch_static_subscription(url):
-    """获取静态订阅源内容"""
-    resp = requests.get(url, headers=HEADERS, timeout=30)
-    resp.raise_for_status()
-    return resp.text.strip()
-
-
-def collect_all_subscriptions():
-    """采集所有订阅源，返回原始文本列表"""
-    raw_contents = []
-
-    for source in SUBSCRIBE_URLS:
-        try:
-            if source["type"] == "dynamic" and source.get("category_url"):
-                if "mibei77" in source.get("category_url", ""):
-                    content = fetch_mibei77_dynamic()
-                    raw_contents.append(content)
-                    logger.info(f"✓ [{source['name']}] 采集成功")
-            elif source["type"] == "static":
-                content = fetch_static_subscription(source["url"])
-                raw_contents.append(content)
-                logger.info(f"✓ [{source['name']}] 采集成功")
-        except Exception as e:
-            logger.warning(f"✗ [{source['name']}] 采集失败: {e}")
-
-    return raw_contents
 
 
 # ============================================================
@@ -244,9 +182,18 @@ def parse_trojan(uri):
         return None
 
 
-def parse_nodes(raw_contents):
-    """解析所有订阅内容为节点列表"""
+def parse_nodes(tagged_contents):
+    """
+    解析所有订阅内容为节点列表。
+    参数：tagged_contents = [(source_name, raw_text), ...]
+    每个节点的 name 格式为 "[源名称][月日][IP]"，如 "[mibei77][0627][1.1.1.1]"
+    返回：(nodes, per_source_node_counts)
+        - nodes: 节点列表
+        - per_source_node_counts: {source_name: node_count} 每源解析到的节点数
+    """
     nodes = []
+    per_source_node_counts = {}
+    date_tag = datetime.now().strftime("%m%d")  # 当前月日，如 "0627"
     parsers = {
         "vmess://": parse_vmess,
         "vless://": parse_vless,
@@ -254,7 +201,8 @@ def parse_nodes(raw_contents):
         "trojan://": parse_trojan,
     }
 
-    for content in raw_contents:
+    for source_name, content in tagged_contents:
+        source_node_count = 0
         # 尝试 base64 解码
         decoded = decode_base64(content)
         if not decoded:
@@ -268,10 +216,58 @@ def parse_nodes(raw_contents):
                 if line.startswith(prefix):
                     node = parser(line)
                     if node and node["address"] and node["port"]:
+                        # 节点名称格式：[源名称][月日][IP:端口]
+                        node["name"] = f"[{source_name}][{date_tag}][{node['address']}:{node['port']}]"
+                        node["source"] = source_name
+                        # 同步更新 raw URI 中的名称（vmess 需要特殊处理）
+                        node["raw"] = _rebuild_raw_with_name(node)
                         nodes.append(node)
+                        source_node_count += 1
                     break
 
-    return nodes
+        per_source_node_counts[source_name] = (
+            per_source_node_counts.get(source_name, 0) + source_node_count
+        )
+
+    return nodes, per_source_node_counts
+
+
+def _rebuild_raw_with_name(node):
+    """重建 raw URI，将节点名称（含源标记）写回到 URI 中"""
+    protocol = node["protocol"]
+    raw = node["raw"]
+    new_name = node["name"]
+
+    try:
+        if protocol == "vmess":
+            # vmess 的名称在 base64 编码的 JSON 中的 "ps" 字段
+            decoded_json = json.loads(decode_base64(raw.replace("vmess://", "")))
+            decoded_json["ps"] = new_name
+            new_b64 = base64.b64encode(
+                json.dumps(decoded_json, ensure_ascii=False).encode("utf-8")
+            ).decode("utf-8")
+            return f"vmess://{new_b64}"
+
+        elif protocol in ("vless", "trojan"):
+            # vless/trojan 的名称在 URI fragment (#名称)
+            if "#" in raw:
+                base_part = raw.rsplit("#", 1)[0]
+            else:
+                base_part = raw
+            return f"{base_part}#{urllib.parse.quote(new_name)}"
+
+        elif protocol == "ss":
+            # ss 的名称在 URI fragment (#名称)
+            if "#" in raw:
+                base_part = raw.rsplit("#", 1)[0]
+            else:
+                base_part = raw
+            return f"{base_part}#{urllib.parse.quote(new_name)}"
+
+    except Exception:
+        pass  # 名称写回失败不影响节点本身
+
+    return raw
 
 
 def deduplicate_nodes(nodes):
@@ -383,7 +379,7 @@ def test_node(node, ping_count=5, timeout=5):
                 latency = tcp_ping(resolved_ip, port, timeout)
             all_latencies.append(latency)
 
-    # 4. 统计分析
+    # 3. 统计分析
     successes = [r for r in all_latencies if r is not None]
     total = len(all_latencies)
     loss_rate = 1.0 - len(successes) / total if total > 0 else 1.0
@@ -1233,7 +1229,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
 
 
 # ============================================================
-# 第四步：筛选 TOP N + 生成订阅
+# 第四步：筛选可用节点 + 生成订阅
 # ============================================================
 
 def select_best_nodes(test_results, max_latency=2000, max_loss=0.4):
@@ -1340,15 +1336,25 @@ def main():
 
     # Step 1: 采集
     logger.info("\n[1/4] 采集订阅源...")
-    raw_contents = collect_all_subscriptions()
-    if not raw_contents:
+    tagged_contents, source_stats = source_module.collect_all()
+    if not tagged_contents:
         logger.error("所有订阅源采集失败，退出")
         sys.exit(1)
 
     # Step 2: 解析去重
     logger.info("\n[2/4] 解析节点并去重...")
-    nodes = parse_nodes(raw_contents)
+    nodes, per_source_node_counts = parse_nodes(tagged_contents)
     logger.info(f"  解析得到 {len(nodes)} 个节点")
+
+    # 输出每个源解析到的节点数
+    logger.info("  各源节点数：")
+    for src_name, count in per_source_node_counts.items():
+        logger.info(f"    [{src_name}] {count} 个节点")
+    # 标记采集成功但解析出 0 节点的源
+    for stat in source_stats:
+        if stat["success"] and stat["name"] not in per_source_node_counts:
+            logger.warning(f"    [{stat['name']}] 采集成功但未解析出任何节点")
+
     unique_nodes = deduplicate_nodes(nodes)
     logger.info(f"  去重后剩余 {len(unique_nodes)} 个节点")
 
@@ -1474,9 +1480,18 @@ def main():
             "tls_test": TEST_CONFIG.get("tls_test_enabled", False),
             "xray_enabled": TEST_CONFIG.get("xray_enabled", True),
             "xray_test_count": TEST_CONFIG.get("xray_test_count", 3),
-            "xray_test_url": TEST_CONFIG.get("xray_test_url", ""),
         },
-        "total_sources": len(SUBSCRIBE_URLS),
+        "total_sources": len(source_module.get_enabled_sources()),
+        "source_details": [
+            {
+                "name": stat["name"],
+                "success": stat["success"],
+                "content_count": stat["content_count"],
+                "node_count": per_source_node_counts.get(stat["name"], 0),
+                "error": stat["error"],
+            }
+            for stat in source_stats
+        ],
         "total_nodes_parsed": len(nodes),
         "unique_nodes": len(unique_nodes),
         "tested_nodes": len(test_results),
@@ -1488,6 +1503,7 @@ def main():
                 "address": n["address"],
                 "port": n["port"],
                 "name": n.get("name", ""),
+                "source": n.get("source", ""),
                 "tcp_latency_ms": n.get("min_latency_ms", n.get("avg_latency_ms", 0)),
                 "xray_real_latency_ms": n.get("xray_avg_ms", None),
                 "xray_min_ms": n.get("xray_min_ms", None),
