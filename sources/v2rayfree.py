@@ -13,6 +13,7 @@ from . import BaseSource, register
 @register
 class V2rayFreeSource(BaseSource):
     name = "v2rayfree"
+    enabled = False  # GitHub 静态节点库，大量历史节点已失效
 
     BASE_URL = "https://raw.githubusercontent.com/free-nodes/v2rayfree/main"
 

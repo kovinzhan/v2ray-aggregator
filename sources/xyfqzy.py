@@ -11,6 +11,7 @@ from . import BaseSource, register
 @register
 class XyfqzySource(BaseSource):
     name = "xyfqzy"
+    enabled = False  # GitHub 静态节点库，大量历史节点已失效
 
     BASE_URL = "https://raw.githubusercontent.com/xyfqzy/free-nodes/main/nodes"
 

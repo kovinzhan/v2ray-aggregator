@@ -11,6 +11,7 @@ from . import BaseSource, register
 @register
 class EbrashaSource(BaseSource):
     name = "ebrasha"
+    enabled = False  # GitHub 静态节点库，历史累积26万+节点大部分已失效
 
     BASE_URL = "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main"
 
