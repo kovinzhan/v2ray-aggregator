@@ -10,6 +10,7 @@ import logging
 import importlib
 import pkgutil
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
@@ -100,9 +101,12 @@ def get_enabled_sources() -> list[BaseSource]:
     return [s for s in _registry.values() if s.enabled]
 
 
-def collect_all() -> tuple[list[tuple[str, str]], list[dict]]:
+def collect_all(max_workers=5, per_source_timeout=60) -> tuple[list[tuple[str, str]], list[dict]]:
     """
-    采集所有已启用源的内容。
+    并发采集所有已启用源的内容。
+    参数：
+        - max_workers: 最大并发线程数，默认 5
+        - per_source_timeout: 每个源的整体超时秒数，默认 60s
     返回：
         - tagged_contents: [(source_name, raw_text), ...] 每段内容带源名称标记
         - source_stats: [{"name":..., "success":..., "content_count":..., "error":...}, ...]
@@ -110,13 +114,31 @@ def collect_all() -> tuple[list[tuple[str, str]], list[dict]]:
     tagged_contents = []  # (source_name, raw_text)
     source_stats = []
     sources = get_enabled_sources()
-    logger.info(f"开始采集，共 {len(sources)} 个启用源")
+    logger.info(f"开始采集，共 {len(sources)} 个启用源（并发={max_workers}，单源超时={per_source_timeout}s）")
 
-    for source in sources:
-        results, status = source.safe_fetch()
-        source_stats.append(status)
-        for content in results:
-            tagged_contents.append((source.name, content))
+    # 并发采集所有源
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_source = {
+            executor.submit(source.safe_fetch): source for source in sources
+        }
+        for future in as_completed(future_to_source):
+            source = future_to_source[future]
+            try:
+                results, status = future.result(timeout=per_source_timeout)
+            except Exception as e:
+                # 超时或线程异常
+                status = {
+                    "name": source.name,
+                    "success": False,
+                    "content_count": 0,
+                    "error": f"整体超时或异常: {e}",
+                }
+                results = []
+                logger.warning(f"✗ [{source.name}] 采集超时或异常: {e}")
+
+            source_stats.append(status)
+            for content in results:
+                tagged_contents.append((source.name, content))
 
     success_count = sum(1 for s in source_stats if s["success"])
     fail_count = sum(1 for s in source_stats if not s["success"])
