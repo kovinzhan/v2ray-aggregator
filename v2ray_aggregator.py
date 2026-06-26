@@ -13,7 +13,6 @@ import time
 import base64
 import shutil
 import socket
-import struct
 import signal
 import logging
 import zipfile
@@ -68,32 +67,6 @@ TEST_CONFIG = {
     "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
     "xray_test_url": "http://www.gstatic.com/generate_204",  # 连通性检测 URL
 }
-
-# 已知 CDN IP 段（这些 IP 的 TCP ping 不代表真实节点延迟）
-CDN_IP_RANGES = [
-    # Fastly
-    ("151.101.0.0", "151.101.255.255"),
-    ("199.232.0.0", "199.232.255.255"),
-    # Cloudflare
-    ("104.16.0.0", "104.31.255.255"),
-    ("172.64.0.0", "172.71.255.255"),
-    ("173.245.48.0", "173.245.63.255"),
-    ("103.21.244.0", "103.22.255.255"),
-    ("141.101.64.0", "141.101.127.255"),
-    ("108.162.192.0", "108.162.255.255"),
-    ("190.93.240.0", "190.93.255.255"),
-    ("188.114.96.0", "188.114.111.255"),
-    ("197.234.240.0", "197.234.243.255"),
-    ("198.41.128.0", "198.41.255.255"),
-    # Akamai 常见
-    ("23.0.0.0", "23.79.255.255"),
-    # AWS CloudFront
-    ("13.32.0.0", "13.35.255.255"),
-    ("52.84.0.0", "52.85.255.255"),
-    ("99.84.0.0", "99.84.255.255"),
-    ("143.204.0.0", "143.204.255.255"),
-    ("204.246.164.0", "204.246.179.255"),
-]
 
 # HTTP 请求头
 HEADERS = {
@@ -317,22 +290,6 @@ def deduplicate_nodes(nodes):
 # 第三步：真实测速（多维度：TCP+TLS+DNS+CDN识别+多轮+抖动）
 # ============================================================
 
-def ip_to_int(ip_str):
-    """IP 地址转整数"""
-    return struct.unpack("!I", socket.inet_aton(ip_str))[0]
-
-
-def is_cdn_ip(ip_str):
-    """检测 IP 是否属于已知 CDN 范围"""
-    try:
-        ip_int = ip_to_int(ip_str)
-        for start, end in CDN_IP_RANGES:
-            if ip_to_int(start) <= ip_int <= ip_to_int(end):
-                return True
-    except Exception:
-        pass
-    return False
-
 
 def dns_resolve(host, timeout=5):
     """DNS 解析，返回 (IP列表, 解析耗时ms)"""
@@ -404,15 +361,11 @@ def test_node(node, ping_count=5, timeout=5):
                 "loss_rate": 1.0,
                 "success_count": 0,
                 "total_count": ping_count,
-                "is_cdn": False,
                 "dns_time_ms": 0,
                 "test_method": "dns_fail",
             }
 
-    # 2. CDN 检测
-    cdn_detected = is_cdn_ip(resolved_ip)
-
-    # 3. 多轮测速
+    # 2. 多轮测速
     all_latencies = []
     rounds = TEST_CONFIG.get("test_rounds", 3)
     round_interval = TEST_CONFIG.get("round_interval", 1)
@@ -464,7 +417,6 @@ def test_node(node, ping_count=5, timeout=5):
         "loss_rate": round(loss_rate, 3),
         "success_count": len(successes),
         "total_count": total,
-        "is_cdn": cdn_detected,
         "dns_time_ms": round(dns_time_ms, 1),
         "test_method": test_method,
     }
@@ -496,12 +448,11 @@ def batch_test_nodes(nodes):
                 results.append(result)
                 # 实时显示测试结果
                 if result["avg_latency_ms"] < float("inf"):
-                    cdn_tag = " [CDN]" if result.get("is_cdn") else ""
                     logger.debug(
                         f"  {result['address']}:{result['port']} → "
                         f"{result['avg_latency_ms']}ms (±{result['jitter_ms']}ms) "
                         f"丢包{result['loss_rate']*100:.0f}% "
-                        f"[{result['test_method']}]{cdn_tag}"
+                        f"[{result['test_method']}]"
                     )
             except Exception as e:
                 logger.debug(f"测试异常: {e}")
@@ -1317,26 +1268,20 @@ def select_best_nodes(test_results, top_n=10, max_latency=2000, max_loss=0.4):
         avg = node["avg_latency_ms"]
         jitter = node.get("jitter_ms", 0)
         loss = node["loss_rate"]
-        is_cdn = node.get("is_cdn", False)
 
         # 归一化到 0~1 范围
         norm_latency = avg / max_avg
         norm_jitter = jitter / max_jitter if max_jitter > 0 else 0
         norm_loss = loss
 
-        # CDN 惩罚：CDN IP 的 TCP 延迟不可信，加分惩罚
-        cdn_penalty = 0.3 if is_cdn else 0
-
         # 综合评分（越低越好）
-        #   延迟权重 40%：低延迟优先
-        #   抖动权重 25%：稳定性高优先
+        #   延迟权重 45%：低延迟优先
+        #   抖动权重 30%：稳定性高优先
         #   丢包权重 25%：低丢包优先
-        #   CDN惩罚 10%：CDN IP 降优先级
         score = (
-            norm_latency * 0.40
-            + norm_jitter * 0.25
+            norm_latency * 0.45
+            + norm_jitter * 0.30
             + norm_loss * 0.25
-            + cdn_penalty * 0.10
         )
         node["score"] = round(score, 4)
 
@@ -1499,29 +1444,28 @@ def main():
     logger.info(f"最优 {len(best_nodes)} 个节点（{'xray 真实代理' if xray_mode else '初筛'}评分排序）：")
     if xray_mode and best_nodes and best_nodes[0].get("xray_ok") is not None:
         logger.info(f"{'序号':<4} {'协议':<7} {'地址':<30} {'真实延迟':<10} {'抖动':<8} "
-                    f"{'稳定':<5} {'CDN':<5} {'名称'}")
+                    f"{'稳定':<5} {'出口IP':<18} {'名称'}")
         logger.info(f"{'-'*110}")
         for i, node in enumerate(best_nodes, 1):
-            cdn_tag = "是" if node.get("is_cdn") else "-"
             stability = node.get("stability", "?")
             xray_avg = node.get("xray_avg_ms", "-")
+            exit_ip = node.get("exit_ip", "-")
             logger.info(
                 f"{i:<4} {node['protocol']:<7} {node['address']}:{node['port']:<20} "
                 f"{xray_avg:<10} {node.get('jitter_ms', 0):<8} "
-                f"{stability:<5} {cdn_tag:<5} {node.get('name', '')[:30]}"
+                f"{stability:<5} {exit_ip:<18} {node.get('name', '')[:30]}"
             )
     else:
         logger.info(f"{'序号':<4} {'协议':<7} {'地址':<35} {'延迟(ms)':<10} {'抖动':<8} "
-                    f"{'丢包':<6} {'稳定':<5} {'CDN':<5} {'方式':<5} {'名称'}")
-        logger.info(f"{'-'*120}")
+                    f"{'丢包':<6} {'稳定':<5} {'方式':<5} {'名称'}")
+        logger.info(f"{'-'*110}")
         for i, node in enumerate(best_nodes, 1):
-            cdn_tag = "是" if node.get("is_cdn") else "-"
             stability = node.get("stability", "?")
             test_method = node.get("test_method", "tcp")
             logger.info(
                 f"{i:<4} {node['protocol']:<7} {node['address']}:{node['port']:<25} "
                 f"{node['avg_latency_ms']:<10} {node.get('jitter_ms', 0):<8} "
-                f"{node['loss_rate']*100:.0f}%{'':<3} {stability:<5} {cdn_tag:<5} "
+                f"{node['loss_rate']*100:.0f}%{'':<3} {stability:<5} "
                 f"{test_method:<5} {node.get('name', '')[:30]}"
             )
 
@@ -1566,7 +1510,6 @@ def main():
                 "xray_max_ms": n.get("xray_max_ms", None),
                 "jitter_ms": n.get("jitter_ms", 0),
                 "loss_rate": n.get("loss_rate", 0),
-                "is_cdn": n.get("is_cdn", False),
                 "xray_ok": n.get("xray_ok", None),
                 "content_verified": n.get("content_verified", False),
                 "exit_ip": n.get("exit_ip", ""),
