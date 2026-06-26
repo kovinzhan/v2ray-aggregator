@@ -913,48 +913,80 @@ def build_xray_multi_config(nodes_with_ports):
     if not outbounds:
         return None, failed_indices
 
-    # 添加一个 direct 出站作为兜底
-    outbounds.append({"tag": "direct", "protocol": "freedom"})
+    # 兜底使用 blackhole 而非 freedom（direct），
+    # 防止路由匹配失败时流量直连出去，导致测试结果不真实
+    outbounds.append({"tag": "block", "protocol": "blackhole"})
 
     config = {
-        "log": {"loglevel": "error"},
+        "log": {"loglevel": "warning"},
         "inbounds": inbounds,
         "outbounds": outbounds,
         "routing": {
             "domainStrategy": "AsIs",
             "rules": routing_rules,
+            # 未匹配到任何规则的流量走 blackhole（丢弃），
+            # 确保每个测试请求必须经过对应的代理节点
+            "defaultOutboundTag": "block",
         },
     }
 
     return config, failed_indices
 
 
-def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
+def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10, local_ip=None):
     """
     通过已启动的 xray 代理端口测试单个节点的真实可用性
     多维度验证：
-    1. generate_204 快速连通性检测
-    2. 实际网页内容下载验证（确保不是被劫持/拦截）
-    3. 多次重复测试确保稳定性
+    1. 出口 IP 验证 — 确认流量确实走了代理（出口IP ≠ 本机IP）
+    2. generate_204 快速连通性检测
+    3. 实际网页内容下载验证（确保不是被劫持/拦截）
     """
     proxy = f"socks5h://127.0.0.1:{socks_port}"
 
-    # 多个测试 URL，按优先级排列
-    # 第一类：快速连通性（轻量）
-    quick_urls = [
-        ("http://www.gstatic.com/generate_204", 204, None),         # Google 204
-        ("http://cp.cloudflare.com/", 200, None),                    # Cloudflare 连通测试
+    # ---- 阶段 0: 出口 IP 验证（最关键！确认流量真正走了代理） ----
+    exit_ip = None
+    ip_check_urls = [
+        "https://api.ipify.org?format=text",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
     ]
-    # 第二类：内容可达性验证（确认能真正访问外网内容）
-    content_urls = [
-        ("https://www.google.com/robots.txt", 200, "User-agent"),    # Google robots.txt 必须含 User-agent
-        ("https://www.cloudflare.com/cdn-cgi/trace", 200, "warp="),  # Cloudflare trace 必须含 warp=
-    ]
+    for url in ip_check_urls:
+        try:
+            resp = requests.get(
+                url,
+                proxies={"http": proxy, "https": proxy},
+                timeout=timeout,
+                headers=HEADERS,
+            )
+            if resp.status_code == 200:
+                exit_ip = resp.text.strip()
+                if exit_ip and len(exit_ip) < 50:
+                    break
+                exit_ip = None
+        except Exception:
+            continue
 
-    latencies = []      # 所有成功请求的延迟
-    content_ok = False  # 是否通过内容验证
+    if not exit_ip:
+        return {
+            **node, "xray_ok": False, "xray_avg_ms": float("inf"),
+            "xray_latencies": [], "xray_error": "exit_ip_check_failed",
+        }
+
+    # 如果出口 IP 和本机 IP 一样，说明流量没走代理（直连了）
+    if local_ip and exit_ip == local_ip:
+        return {
+            **node, "xray_ok": False, "xray_avg_ms": float("inf"),
+            "xray_latencies": [],
+            "xray_error": f"proxy_bypass_detected(exit_ip={exit_ip}==local_ip)",
+        }
 
     # ---- 阶段 1: 快速连通性测试 ----
+    quick_urls = [
+        ("http://www.gstatic.com/generate_204", 204, None),
+        ("http://cp.cloudflare.com/", 200, None),
+    ]
+
+    latencies = []
     for i in range(test_count):
         url, expected_code, _ = quick_urls[i % len(quick_urls)]
         try:
@@ -976,7 +1008,6 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
         if i < test_count - 1:
             time.sleep(0.3)
 
-    # 快速连通都失败了，直接返回
     quick_successes = [l for l in latencies if l is not None]
     if not quick_successes:
         return {
@@ -985,6 +1016,11 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
         }
 
     # ---- 阶段 2: 内容可达性验证（至少通过一个） ----
+    content_urls = [
+        ("https://www.google.com/robots.txt", 200, "User-agent"),
+        ("https://www.cloudflare.com/cdn-cgi/trace", 200, "warp="),
+    ]
+    content_ok = False
     content_latencies = []
     for url, expected_code, expected_content in content_urls:
         try:
@@ -1001,7 +1037,7 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
                 if expected_content and expected_content in body:
                     content_ok = True
                     content_latencies.append(elapsed)
-                    break  # 通过一个即可
+                    break
                 elif not expected_content:
                     content_ok = True
                     content_latencies.append(elapsed)
@@ -1029,11 +1065,31 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10):
         "xray_max_ms": round(max(all_latencies), 1),
         "xray_jitter_ms": round(jitter, 1),
         "xray_success": len(all_latencies),
-        "xray_total": test_count + 1,  # quick tests + content test
+        "xray_total": test_count + 1,
         "xray_latencies": [round(l, 1) if l else None for l in latencies] + [round(l, 1) for l in content_latencies],
         "xray_error": "",
         "content_verified": True,
+        "exit_ip": exit_ip,  # 记录出口 IP，方便排查
     }
+
+
+def get_local_ip():
+    """获取本机公网 IP（不走代理），用于后续验证代理是否生效"""
+    ip_apis = [
+        "https://api.ipify.org?format=text",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+    ]
+    for url in ip_apis:
+        try:
+            resp = requests.get(url, timeout=5, headers=HEADERS)
+            if resp.status_code == 200:
+                ip = resp.text.strip()
+                if ip and len(ip) < 50:  # 基本格式检查
+                    return ip
+        except Exception:
+            continue
+    return None
 
 
 def batch_xray_test(xray_bin, candidate_nodes):
@@ -1041,7 +1097,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
     单进程多节点并发测速：
     1. 为所有候选节点分配端口，生成一个合并配置
     2. 启动 1 个 xray 进程（所有节点共享）
-    3. 并发通过各端口测速
+    3. 并发通过各端口测速（含出口 IP 验证，确保流量真正走了代理）
     4. 关闭进程，清理资源
     """
     config = TEST_CONFIG
@@ -1053,6 +1109,13 @@ def batch_xray_test(xray_bin, candidate_nodes):
 
     logger.info(f"  xray 真实代理测速（单进程模式）：{total} 个候选，并发 {max_workers}")
     logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
+
+    # 获取本机公网 IP，用于后续验证代理出口是否不同
+    local_ip = get_local_ip()
+    if local_ip:
+        logger.info(f"  本机公网 IP: {local_ip}（代理出口 IP 必须与此不同）")
+    else:
+        logger.warning("  无法获取本机公网 IP，跳过出口 IP 验证")
 
     # 1. 分配端口
     ports = find_free_ports(total)
@@ -1167,7 +1230,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(
-                    xray_test_via_proxy, node, port, test_count, timeout
+                    xray_test_via_proxy, node, port, test_count, timeout, local_ip
                 ): (idx, node)
                 for idx, node, port in testable
             }
@@ -1184,9 +1247,11 @@ def batch_xray_test(xray_bin, candidate_nodes):
                     err = result.get("xray_error", "")
                     name = result.get("name", "")[:20]
                     verified = " [内容验证✓]" if result.get("content_verified") else ""
+                    exit_ip = result.get("exit_ip", "")
+                    ip_info = f" [出口:{exit_ip}]" if exit_ip else ""
                     logger.info(
                         f"  [{done_count}/{len(testable)}] {status} {node['address']}:{node['port']} "
-                        f"→ {avg}ms {f'({err})' if err else ''}{verified} {name}"
+                        f"→ {avg}ms {f'({err})' if err else ''}{verified}{ip_info} {name}"
                     )
                 except Exception as e:
                     results.append({
@@ -1504,6 +1569,7 @@ def main():
                 "is_cdn": n.get("is_cdn", False),
                 "xray_ok": n.get("xray_ok", None),
                 "content_verified": n.get("content_verified", False),
+                "exit_ip": n.get("exit_ip", ""),
                 "stability": n.get("stability", "?"),
                 "score": n.get("score", 0),
             }

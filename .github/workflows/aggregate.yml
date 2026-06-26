@@ -37,7 +37,7 @@ jobs:
             --workers 30 \
             --ping-count 3 \
             --rounds 2 \
-            --xray-candidates 30 \
+            --xray-candidates 50 \
             --verbose
 
       - name: Commit and push results
