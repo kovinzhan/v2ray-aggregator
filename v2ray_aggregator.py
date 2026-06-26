@@ -619,6 +619,13 @@ def build_xray_outbound(node, tag="proxy"):
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": decoded.get("path", "")}
+        elif net in ("h2", "http"):
+            stream["network"] = "h2"
+            h2_host = decoded.get("host", address)
+            stream["httpSettings"] = {
+                "path": decoded.get("path", "/"),
+                "host": [h2_host] if h2_host else [address],
+            }
         elif net in ("xhttp", "splithttp"):
             stream["network"] = "xhttp"
             stream["xhttpSettings"] = {
@@ -628,10 +635,21 @@ def build_xray_outbound(node, tag="proxy"):
 
         if tls_val == "tls":
             stream["security"] = "tls"
-            stream["tlsSettings"] = {
+            tls_settings = {
                 "serverName": decoded.get("sni") or decoded.get("host") or address,
                 "allowInsecure": True,
             }
+            # TLS 指纹伪装 — 很多 CDN 节点必须有此项才能连接
+            fp = decoded.get("fp", "")
+            if fp:
+                tls_settings["fingerprint"] = fp
+            else:
+                tls_settings["fingerprint"] = "chrome"  # 默认伪装 chrome
+            # ALPN 协商 — 某些节点要求特定协议
+            alpn = decoded.get("alpn", "")
+            if alpn:
+                tls_settings["alpn"] = alpn.split(",")
+            stream["tlsSettings"] = tls_settings
 
         outbound = {
             "tag": tag,
@@ -669,6 +687,13 @@ def build_xray_outbound(node, tag="proxy"):
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
+        elif net in ("h2", "http"):
+            stream["network"] = "h2"
+            h2_host = params.get("host", address)
+            stream["httpSettings"] = {
+                "path": params.get("path", "/"),
+                "host": [h2_host] if h2_host else [address],
+            }
         elif net == "httpupgrade":
             stream["httpupgradeSettings"] = {
                 "path": params.get("path", "/"),
@@ -683,18 +708,34 @@ def build_xray_outbound(node, tag="proxy"):
 
         if security == "tls":
             stream["security"] = "tls"
-            stream["tlsSettings"] = {
+            tls_settings = {
                 "serverName": params.get("sni", address),
                 "allowInsecure": True,
             }
+            # TLS 指纹伪装
+            fp = params.get("fp", "")
+            if fp:
+                tls_settings["fingerprint"] = fp
+            else:
+                tls_settings["fingerprint"] = "chrome"
+            # ALPN 协商
+            alpn = params.get("alpn", "")
+            if alpn:
+                tls_settings["alpn"] = alpn.split(",")
+            stream["tlsSettings"] = tls_settings
         elif security == "reality":
             stream["security"] = "reality"
-            stream["realitySettings"] = {
+            reality_settings = {
                 "serverName": params.get("sni", ""),
                 "fingerprint": params.get("fp", "chrome"),
                 "publicKey": params.get("pbk", ""),
                 "shortId": params.get("sid", ""),
             }
+            # Reality 的 spiderX 参数
+            spx = params.get("spx", "")
+            if spx:
+                reality_settings["spiderX"] = spx
+            stream["realitySettings"] = reality_settings
 
         flow = params.get("flow", "")
         user = {"id": uuid, "encryption": "none"}
@@ -733,6 +774,13 @@ def build_xray_outbound(node, tag="proxy"):
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
+        elif net in ("h2", "http"):
+            stream["network"] = "h2"
+            h2_host = params.get("host", address)
+            stream["httpSettings"] = {
+                "path": params.get("path", "/"),
+                "host": [h2_host] if h2_host else [address],
+            }
         elif net in ("xhttp", "splithttp"):
             stream["network"] = "xhttp"
             stream["xhttpSettings"] = {
@@ -742,10 +790,21 @@ def build_xray_outbound(node, tag="proxy"):
 
         if security == "tls" or security == "":
             stream["security"] = "tls"
-            stream["tlsSettings"] = {
+            tls_settings = {
                 "serverName": params.get("sni", address),
                 "allowInsecure": True,
             }
+            # TLS 指纹伪装
+            fp = params.get("fp", "")
+            if fp:
+                tls_settings["fingerprint"] = fp
+            else:
+                tls_settings["fingerprint"] = "chrome"
+            # ALPN 协商
+            alpn = params.get("alpn", "")
+            if alpn:
+                tls_settings["alpn"] = alpn.split(",")
+            stream["tlsSettings"] = tls_settings
 
         outbound = {
             "tag": tag,
