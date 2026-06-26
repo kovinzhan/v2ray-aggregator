@@ -28,7 +28,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .xray
-          key: xray-core-v1.8.24-linux-64
+          key: xray-core-v25.10.15-linux-64
 
       - name: Run aggregator (两阶段测速：TCP/TLS初筛 + xray真实代理验证)
         run: |

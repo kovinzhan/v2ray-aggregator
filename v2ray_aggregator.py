@@ -516,7 +516,7 @@ def batch_test_nodes(nodes):
 # 第三步 B：xray-core 真实代理测速
 # ============================================================
 
-XRAY_VERSION = "1.8.24"
+XRAY_VERSION = "25.10.15"
 XRAY_DIR = Path(__file__).parent / ".xray"
 
 
@@ -593,6 +593,10 @@ def build_xray_outbound(node, tag="proxy"):
     port = node["port"]
     raw_uri = node["raw"]
 
+    # xray 支持的传输协议白名单
+    SUPPORTED_NETWORKS = {"tcp", "ws", "grpc", "h2", "http", "kcp", "quic",
+                          "httpupgrade", "splithttp", "xhttp"}
+
     if protocol == "vmess":
         try:
             decoded = json.loads(decode_base64(raw_uri.replace("vmess://", "")))
@@ -602,6 +606,11 @@ def build_xray_outbound(node, tag="proxy"):
         net = decoded.get("net", "tcp")
         tls_val = decoded.get("tls", "")
 
+        # 检查传输协议是否支持
+        if net not in SUPPORTED_NETWORKS:
+            logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
+            return None
+
         stream = {"network": net}
         if net == "ws":
             stream["wsSettings"] = {
@@ -610,6 +619,12 @@ def build_xray_outbound(node, tag="proxy"):
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": decoded.get("path", "")}
+        elif net in ("xhttp", "splithttp"):
+            stream["network"] = "xhttp"
+            stream["xhttpSettings"] = {
+                "path": decoded.get("path", "/"),
+                "host": decoded.get("host", address),
+            }
 
         if tls_val == "tls":
             stream["security"] = "tls"
@@ -641,6 +656,11 @@ def build_xray_outbound(node, tag="proxy"):
         net = params.get("type", "tcp")
         security = params.get("security", "none")
 
+        # 检查传输协议是否支持
+        if net not in SUPPORTED_NETWORKS:
+            logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
+            return None
+
         stream = {"network": net}
         if net == "ws":
             stream["wsSettings"] = {
@@ -651,6 +671,12 @@ def build_xray_outbound(node, tag="proxy"):
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
         elif net == "httpupgrade":
             stream["httpupgradeSettings"] = {
+                "path": params.get("path", "/"),
+                "host": params.get("host", address),
+            }
+        elif net in ("xhttp", "splithttp"):
+            stream["network"] = "xhttp"
+            stream["xhttpSettings"] = {
                 "path": params.get("path", "/"),
                 "host": params.get("host", address),
             }
@@ -694,6 +720,11 @@ def build_xray_outbound(node, tag="proxy"):
         net = params.get("type", "tcp")
         security = params.get("security", "tls")
 
+        # 检查传输协议是否支持
+        if net not in SUPPORTED_NETWORKS:
+            logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
+            return None
+
         stream = {"network": net}
         if net == "ws":
             stream["wsSettings"] = {
@@ -702,6 +733,12 @@ def build_xray_outbound(node, tag="proxy"):
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
+        elif net in ("xhttp", "splithttp"):
+            stream["network"] = "xhttp"
+            stream["xhttpSettings"] = {
+                "path": params.get("path", "/"),
+                "host": params.get("host", address),
+            }
 
         if security == "tls" or security == "":
             stream["security"] = "tls"
