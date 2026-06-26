@@ -930,24 +930,80 @@ def batch_xray_test(xray_bin, candidate_nodes):
 
     xray_proc = None
     try:
+        # 先验证 xray 二进制可执行性
+        try:
+            version_result = subprocess.run(
+                [xray_bin, "version"],
+                capture_output=True, timeout=10,
+            )
+            logger.info(f"  xray 版本: {version_result.stdout.decode(errors='ignore').splitlines()[0] if version_result.stdout else '未知'}")
+            if version_result.returncode != 0:
+                err_msg = version_result.stderr.decode(errors="ignore")[:300]
+                logger.error(f"  xray 二进制不可用: {err_msg}")
+                for idx, (node, _) in enumerate(nodes_with_ports):
+                    if idx not in failed_indices:
+                        results.append({
+                            **node, "xray_ok": False, "xray_avg_ms": float("inf"),
+                            "xray_latencies": [], "xray_error": f"xray_binary_invalid: {err_msg[:100]}",
+                        })
+                return results
+        except Exception as ve:
+            logger.error(f"  xray 二进制验证失败: {ve}")
+
+        # 启动 xray 进程，同时捕获 stdout 和 stderr 以便调试
         xray_proc = subprocess.Popen(
             [xray_bin, "run", "-c", str(config_file)],
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             preexec_fn=os.setsid if platform.system() != "Windows" else None,
         )
 
-        # 等待 xray 启动（只需等一次）
-        time.sleep(startup_wait)
+        # 等待 xray 启动，逐步检查（最多等 startup_wait * 2 秒）
+        max_wait = startup_wait * 2
+        waited = 0
+        check_interval = 0.5
+        while waited < max_wait:
+            time.sleep(check_interval)
+            waited += check_interval
+            if xray_proc.poll() is not None:
+                break
+            # 尝试连接第一个节点的端口来确认 xray 已就绪
+            if waited >= startup_wait:
+                first_testable = next(
+                    ((idx, port) for idx, (_, port) in enumerate(nodes_with_ports) if idx not in failed_indices),
+                    None
+                )
+                if first_testable:
+                    try:
+                        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        test_sock.settimeout(1)
+                        test_sock.connect(("127.0.0.1", first_testable[1]))
+                        test_sock.close()
+                        logger.info(f"  xray 端口就绪（等待 {waited:.1f}s）")
+                        break
+                    except Exception:
+                        pass
 
         if xray_proc.poll() is not None:
             stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:500]
-            logger.error(f"  xray 进程启动失败: {stderr_out}")
+            stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:500]
+            exit_code = xray_proc.returncode
+            logger.error(f"  xray 进程启动失败 (exit_code={exit_code})")
+            if stderr_out:
+                logger.error(f"  stderr: {stderr_out}")
+            if stdout_out:
+                logger.error(f"  stdout: {stdout_out}")
+            # 记录配置文件内容（前500字符）用于调试
+            try:
+                cfg_preview = config_file.read_text()[:500]
+                logger.error(f"  配置预览: {cfg_preview}")
+            except Exception:
+                pass
             for idx, (node, _) in enumerate(nodes_with_ports):
                 if idx not in failed_indices:
                     results.append({
                         **node, "xray_ok": False, "xray_avg_ms": float("inf"),
-                        "xray_latencies": [], "xray_error": f"xray_crashed: {stderr_out[:100]}",
+                        "xray_latencies": [], "xray_error": f"xray_crashed(exit={exit_code}): {stderr_out[:100]}",
                     })
             return results
 
