@@ -22,10 +22,10 @@ pip install -r requirements.txt -q
 
 # 4. 测试运行
 echo "测试运行..."
-python3 v2ray_aggregator.py --top 10
+python3 v2ray_aggregator.py --verbose
 
-# 5. 设置 cron 定时任务（每天中午 12:00 执行）
-CRON_CMD="0 12 * * * cd $PROJECT_DIR && $PROJECT_DIR/venv/bin/python3 v2ray_aggregator.py --top 10 >> $PROJECT_DIR/cron.log 2>&1"
+# 5. 设置 cron 定时任务（每 6 小时执行一次）
+CRON_CMD="0 */6 * * * cd $PROJECT_DIR && $PROJECT_DIR/venv/bin/python3 v2ray_aggregator.py --verbose >> $PROJECT_DIR/cron.log 2>&1"
 
 # 检查是否已有相同 cron
 (crontab -l 2>/dev/null | grep -v "v2ray_aggregator" ; echo "$CRON_CMD") | crontab -
@@ -34,6 +34,6 @@ echo ""
 echo "=== 部署完成 ==="
 echo "项目目录: $PROJECT_DIR"
 echo "订阅文件: $PROJECT_DIR/output/best_nodes.txt"
-echo "定时任务: 每天 12:00 自动更新"
+echo "定时任务: 每 6 小时自动更新"
 echo ""
 echo "下一步: 配置 Nginx/Caddy 将 output/best_nodes.txt 暴露为 HTTP 订阅地址"

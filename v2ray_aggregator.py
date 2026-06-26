@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 V2Ray 订阅聚合平台
-功能：多源采集 → 解析去重 → 真实延迟测试(多轮+抖动+CDN识别) → 筛选TOP10 → 生成订阅
-部署：云服务器 + cron 定时执行
+功能：多源采集 → 解析去重 → TCP/TLS初筛 → xray真实代理验证 → 输出所有可用节点订阅
+策略：不限数量，只筛可用性，让客户端自行测速选最优
+部署：GitHub Actions 定时执行 / 云服务器 cron
 """
 
 import os
@@ -51,7 +52,6 @@ TEST_CONFIG = {
     "tcp_ping_count": 3,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
     "tcp_ping_timeout": 5,      # 单次超时（秒）
     "max_workers": 30,          # 并发测试线程数
-    "top_n": 10,                # 最终筛选最优节点数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     "max_loss_rate": 0.4,       # 最大可接受丢包率
     "test_rounds": 2,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）
@@ -63,7 +63,6 @@ TEST_CONFIG = {
     "xray_test_count": 3,       # 每个节点通过代理请求次数
     "xray_test_timeout": 10,    # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
-    "xray_candidate_count": 50, # 初筛后进入 xray 测试的候选节点数（免费节点可用率低，需要多候选）
     "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
     "xray_test_url": "http://www.gstatic.com/generate_204",  # 连通性检测 URL
 }
@@ -1237,10 +1236,10 @@ def batch_xray_test(xray_bin, candidate_nodes):
 # 第四步：筛选 TOP N + 生成订阅
 # ============================================================
 
-def select_best_nodes(test_results, top_n=10, max_latency=2000, max_loss=0.4):
+def select_best_nodes(test_results, max_latency=2000, max_loss=0.4):
     """
-    筛选最优节点 —— 综合评分模型
-    维度：延迟(40%) + 稳定性/抖动(25%) + 丢包率(25%) + CDN惩罚(10%)
+    筛选可用节点 —— 过滤不可用的，保留所有能用的
+    不限制数量，让客户端自己测速选最优
     """
     # 过滤不可用节点
     valid = [
@@ -1274,10 +1273,7 @@ def select_best_nodes(test_results, top_n=10, max_latency=2000, max_loss=0.4):
         norm_jitter = jitter / max_jitter if max_jitter > 0 else 0
         norm_loss = loss
 
-        # 综合评分（越低越好）
-        #   延迟权重 45%：低延迟优先
-        #   抖动权重 30%：稳定性高优先
-        #   丢包权重 25%：低丢包优先
+        # 综合评分（越低越好，仅用于排序展示）
         score = (
             norm_latency * 0.45
             + norm_jitter * 0.30
@@ -1295,10 +1291,10 @@ def select_best_nodes(test_results, top_n=10, max_latency=2000, max_loss=0.4):
         else:
             node["stability"] = "☆"
 
-    # 按评分排序
+    # 按评分排序（客户端可自行测速，这里只做参考排序）
     valid.sort(key=lambda x: x["score"])
 
-    return valid[:top_n]
+    return valid
 
 
 def generate_subscription(nodes):
@@ -1314,20 +1310,16 @@ def generate_subscription(nodes):
 
 def main():
     parser = argparse.ArgumentParser(description="V2Ray 订阅聚合 - 采集/去重/真实测速/筛选")
-    parser.add_argument("--top", type=int, default=TEST_CONFIG["top_n"], help="筛选最优节点数 (默认10)")
     parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认30)")
     parser.add_argument("--output", type=str, default=None, help="输出目录 (默认 ./output)")
     parser.add_argument("--ping-count", type=int, default=TEST_CONFIG["tcp_ping_count"], help="每轮ping次数 (默认5)")
     parser.add_argument("--rounds", type=int, default=TEST_CONFIG.get("test_rounds", 3), help="测速轮次 (默认3)")
     parser.add_argument("--no-tls", action="store_true", help="禁用 TLS 握手测试（只用 TCP ping）")
     parser.add_argument("--no-xray", action="store_true", help="禁用 xray-core 真实代理测试（只用 TCP/TLS 初筛）")
-    parser.add_argument("--xray-candidates", type=int, default=TEST_CONFIG.get("xray_candidate_count", 30),
-                        help="初筛后进入 xray 测试的候选节点数 (默认30)")
     parser.add_argument("--timeout", type=int, default=TEST_CONFIG["tcp_ping_timeout"], help="单次超时秒数 (默认5)")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细测速日志")
     args = parser.parse_args()
 
-    TEST_CONFIG["top_n"] = args.top
     TEST_CONFIG["max_workers"] = args.workers
     TEST_CONFIG["tcp_ping_count"] = args.ping_count
     TEST_CONFIG["test_rounds"] = args.rounds
@@ -1336,7 +1328,6 @@ def main():
         TEST_CONFIG["tls_test_enabled"] = False
     if args.no_xray:
         TEST_CONFIG["xray_enabled"] = False
-    TEST_CONFIG["xray_candidate_count"] = args.xray_candidates
     if args.verbose:
         logging.getLogger(__name__).setLevel(logging.DEBUG)
 
@@ -1369,22 +1360,17 @@ def main():
     logger.info("\n[3/5] 阶段一：TCP/TLS 快速初筛...")
     test_results = batch_test_nodes(unique_nodes)
 
-    # 初筛排序，选出候选节点
-    logger.info("\n[4/5] 初筛结果排序...")
-    preliminary_best = select_best_nodes(
-        test_results,
-        top_n=TEST_CONFIG.get("xray_candidate_count", 30),
-        max_latency=TEST_CONFIG["max_latency_ms"],
-        max_loss=TEST_CONFIG["max_loss_rate"],
-    )
+    # 初筛过滤：只排除完全不可达的节点，其余全部进 xray 验证
+    logger.info("\n[4/5] 初筛过滤不可达节点...")
+    preliminary_best = [
+        r for r in test_results
+        if r["avg_latency_ms"] < float("inf") and r["loss_rate"] < 1.0
+    ]
 
     if not preliminary_best:
-        logger.warning("初筛无可用节点，取延迟最低的作为候选...")
-        test_results.sort(key=lambda x: x["avg_latency_ms"])
-        preliminary_best = [r for r in test_results if r["avg_latency_ms"] < float("inf")]
-        preliminary_best = preliminary_best[:TEST_CONFIG.get("xray_candidate_count", 30)]
+        logger.warning("初筛无可用节点")
 
-    logger.info(f"  初筛通过 {len(preliminary_best)} 个候选节点")
+    logger.info(f"  初筛通过 {len(preliminary_best)} 个候选节点（TCP/TLS 可达）")
 
     # Step 4: 阶段二 —— xray-core 真实代理验证
     if TEST_CONFIG.get("xray_enabled", True) and preliminary_best:
@@ -1402,19 +1388,17 @@ def main():
             if xray_ok_nodes:
                 # 用 xray 真实延迟重新评分
                 for node in xray_ok_nodes:
-                    # xray 延迟作为主要指标，覆盖 TCP/TLS 延迟
                     node["real_latency_ms"] = node["xray_avg_ms"]
                     node["avg_latency_ms"] = node["xray_avg_ms"]
                     node["jitter_ms"] = node.get("xray_jitter_ms", 0)
 
-                # 重新筛选排序
+                # 所有 xray 验证通过的节点全部保留
                 best_nodes = select_best_nodes(
                     xray_ok_nodes,
-                    top_n=TEST_CONFIG["top_n"],
                     max_latency=TEST_CONFIG["max_latency_ms"],
                     max_loss=1.0,  # xray 已经验证过可用，放宽丢包限制
                 )
-                logger.info(f"  ✓ 经 xray 真实代理验证可用: {len(best_nodes)} 个节点")
+                logger.info(f"  ✓ 经 xray 真实代理验证可用: {len(best_nodes)} 个节点（全部输出）")
             else:
                 logger.warning("=" * 60)
                 logger.warning("xray 真实代理测试全部失败！")
@@ -1427,11 +1411,11 @@ def main():
         except Exception as e:
             logger.error(f"xray-core 测速失败: {e}")
             logger.warning("xray 测试异常，回退使用初筛结果（仅供参考，可能不可用）")
-            best_nodes = preliminary_best[:TEST_CONFIG["top_n"]]
+            best_nodes = preliminary_best
     else:
         if not TEST_CONFIG.get("xray_enabled", True):
             logger.info("\n[5/5] xray-core 测试已禁用，使用初筛结果")
-        best_nodes = preliminary_best[:TEST_CONFIG["top_n"]]
+        best_nodes = preliminary_best
 
     if not best_nodes:
         logger.warning("未筛选到任何可用节点！")
@@ -1441,7 +1425,7 @@ def main():
     # 输出结果
     xray_mode = TEST_CONFIG.get("xray_enabled", True)
     logger.info(f"\n{'='*80}")
-    logger.info(f"最优 {len(best_nodes)} 个节点（{'xray 真实代理' if xray_mode else '初筛'}评分排序）：")
+    logger.info(f"可用 {len(best_nodes)} 个节点（{'xray 真实代理验证' if xray_mode else '初筛'}通过）：")
     if xray_mode and best_nodes and best_nodes[0].get("xray_ok") is not None:
         logger.info(f"{'序号':<4} {'协议':<7} {'地址':<30} {'真实延迟':<10} {'抖动':<8} "
                     f"{'稳定':<5} {'出口IP':<18} {'名称'}")
