@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-27T08:03:26.794626",
+  "generated_at": "2026-06-27T08:22:27.381157",
   "test_config": {
     "rounds": 2,
     "pings_per_round": 3,
@@ -8,13 +8,13 @@
     "xray_enabled": true,
     "xray_test_count": 3
   },
-  "total_sources": 7,
+  "total_sources": 6,
   "source_details": [
     {
-      "name": "clashmeta",
+      "name": "yoyapai",
       "success": true,
-      "content_count": 8,
-      "node_count": 1014,
+      "content_count": 2,
+      "node_count": 325,
       "error": ""
     },
     {
@@ -25,24 +25,17 @@
       "error": ""
     },
     {
-      "name": "passwall",
-      "success": true,
-      "content_count": 8,
-      "node_count": 1014,
-      "error": ""
-    },
-    {
-      "name": "yoyapai",
-      "success": false,
-      "content_count": 0,
-      "node_count": 0,
-      "error": "文章页 https://yoyapai.com/564 中未找到订阅链接"
-    },
-    {
       "name": "v2raynode",
       "success": true,
       "content_count": 3,
       "node_count": 979,
+      "error": ""
+    },
+    {
+      "name": "clashmeta",
+      "success": true,
+      "content_count": 8,
+      "node_count": 1014,
       "error": ""
     },
     {
@@ -53,16 +46,16 @@
       "error": ""
     },
     {
-      "name": "hysteria350",
+      "name": "passwall",
       "success": true,
-      "content_count": 17,
-      "node_count": 102,
+      "content_count": 7,
+      "node_count": 1014,
       "error": ""
     }
   ],
-  "total_nodes_parsed": 3441,
-  "unique_nodes": 812,
-  "tested_nodes": 812,
+  "total_nodes_parsed": 3664,
+  "unique_nodes": 825,
+  "tested_nodes": 825,
   "selected_nodes": 0,
   "best_nodes": []
 }
