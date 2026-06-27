@@ -330,20 +330,23 @@ def _extract_country_from_address(address):
     return None
 
 
-def parse_nodes(tagged_contents, day_offset=0):
+def parse_nodes(tagged_contents):
     """
     解析所有订阅内容为节点列表。
     参数：
-        tagged_contents = [(source_name, raw_text), ...]
-        day_offset: 天数偏移（0=今天不写, -1=昨天, -2=前天）
-    当天节点 name 格式为 "[国家][源名称][IP:端口]"，如 "[美国][mibei77][1.1.1.1:443]"
-    历史节点加前缀如 "[-1][日本][v2raynode][2.2.2.2:8080]"
+        tagged_contents = [(source_name, raw_text, data_date), ...]
+        data_date 格式为 "YYYY-MM-DD"，用于计算与今天的天数差
+    当天数据节点 name 格式为 "[国家][源名称][IP:端口]"，如 "[美国][mibei77][1.1.1.1:443]"
+    非当天数据节点加前缀如 "[-1][日本][v2raynode][2.2.2.2:8080]"（表示数据是1天前的）
     返回：(nodes, per_source_node_counts)
         - nodes: 节点列表
         - per_source_node_counts: {source_name: node_count} 每源解析到的节点数
     """
+    from datetime import date
+
     nodes = []
     per_source_node_counts = {}
+    today = date.today()
     parsers = {
         "vmess://": parse_vmess,
         "vless://": parse_vless,
@@ -351,8 +354,15 @@ def parse_nodes(tagged_contents, day_offset=0):
         "trojan://": parse_trojan,
     }
 
-    for source_name, content in tagged_contents:
+    for source_name, content, data_date in tagged_contents:
         source_node_count = 0
+        # 计算数据日期与今天的天数差
+        try:
+            d = date.fromisoformat(data_date)
+            day_offset = (d - today).days  # 0=今天, -1=昨天, -2=前天
+        except (ValueError, TypeError):
+            day_offset = 0
+
         # 尝试 base64 解码
         decoded = decode_base64(content)
         if not decoded:
@@ -372,13 +382,14 @@ def parse_nodes(tagged_contents, day_offset=0):
                             addr_country = _extract_country_from_address(node["address"])
                             if addr_country:
                                 country = addr_country
-                        # 节点名称格式：[国家][源名称][IP:端口]，历史节点加 [-N] 前缀
+                        # 节点名称格式：[国家][源名称][IP:端口]，非当天数据加 [-N] 前缀
                         if day_offset == 0:
                             node["name"] = f"[{country}][{source_name}][{node['address']}:{node['port']}]"
                         else:
                             node["name"] = f"[{day_offset}][{country}][{source_name}][{node['address']}:{node['port']}]"
                         node["source"] = source_name
                         node["country"] = country
+                        node["day_offset"] = day_offset
                         # 同步更新 raw URI 中的名称（vmess 需要特殊处理）
                         node["raw"] = _rebuild_raw_with_name(node)
                         nodes.append(node)
@@ -1599,7 +1610,6 @@ def main():
     parser.add_argument("--no-xray", action="store_true", help="禁用 xray-core 真实代理测试（只用 TCP/TLS 初筛）")
     parser.add_argument("--timeout", type=int, default=TEST_CONFIG["tcp_ping_timeout"], help="单次超时秒数 (默认5)")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细测速日志")
-    parser.add_argument("--day-offset", type=int, default=0, help="天数偏移（0=今天, -1=昨天），显示在节点名称中")
     args = parser.parse_args()
 
     TEST_CONFIG["max_workers"] = args.workers
@@ -1629,7 +1639,7 @@ def main():
 
     # Step 2: 解析去重
     logger.info("\n[2/4] 解析节点并去重...")
-    nodes, per_source_node_counts = parse_nodes(tagged_contents, day_offset=args.day_offset)
+    nodes, per_source_node_counts = parse_nodes(tagged_contents)
     logger.info(f"  解析得到 {len(nodes)} 个节点")
 
     # 输出每个源解析到的节点数
@@ -1745,36 +1755,50 @@ def main():
                 f"{test_method:<5} {node.get('name', '')[:30]}"
             )
 
-    # 合并历史节点：[-N] 表示数据是 N 天前获取的，今天的无前缀，最多保留到 [-2]
+    # 合并历史节点：[-N] 表示数据源的数据是 N 天前的，最多保留到 [-2]
+    # 通过文件修改日期判断上次运行距今天数，再叠加节点本身的偏移
     sub_file = output_dir / "best_nodes.txt"
     history_nodes = []
     if sub_file.exists() and best_nodes:
         try:
-            old_content = sub_file.read_text(encoding="utf-8").strip()
-            if old_content:
-                old_decoded = decode_base64(old_content)
-                if old_decoded:
-                    for line in old_decoded.splitlines():
-                        line = line.strip()
-                        if not line:
-                            continue
-                        # 从 URI 中提取节点名称，检查是否已有 [-N] 前缀
-                        node_name = _get_name_from_raw(line)
-                        match = re.match(r'^\[(-\d+)\]', node_name) if node_name else None
-                        if match:
-                            # 已经是历史节点，天数偏移再 -1
-                            old_offset = int(match.group(1))
-                            new_offset = old_offset - 1
-                            # 只保留 2 天历史（[-1] 和 [-2]），更早的丢弃
+            from datetime import date
+            # 上次运行日期（文件修改时间）
+            file_mtime = datetime.fromtimestamp(sub_file.stat().st_mtime).date()
+            days_since_last_run = (date.today() - file_mtime).days
+            if days_since_last_run == 0:
+                # 同一天内多次运行，不合并历史（避免重复）
+                logger.info("  同一天内重复运行，不合并历史节点")
+            else:
+                old_content = sub_file.read_text(encoding="utf-8").strip()
+                if old_content:
+                    old_decoded = decode_base64(old_content)
+                    if old_decoded:
+                        for line in old_decoded.splitlines():
+                            line = line.strip()
+                            if not line:
+                                continue
+                            # 从 URI 中提取节点名称，检查已有的偏移
+                            node_name = _get_name_from_raw(line)
+                            match = re.match(r'^\[(-\d+)\]', node_name) if node_name else None
+                            if match:
+                                # 已有偏移：原偏移 + 距上次运行的天数
+                                old_offset = int(match.group(1))
+                                new_offset = old_offset - days_since_last_run
+                            else:
+                                # 无偏移（上次运行时是当天数据）：加上距今天数
+                                new_offset = -days_since_last_run
+
+                            # 只保留 2 天内的历史
                             if new_offset < -2:
                                 continue
-                            # 替换名称中的 [-N] 为新偏移
-                            line = _replace_day_offset_in_raw(line, old_offset, new_offset)
-                        else:
-                            # 当天节点（无 [-N] 前缀），标记为 [-1]
-                            line = _add_day_offset_to_raw(line, -1)
-                        history_nodes.append(line)
-                    logger.info(f"  合并历史节点 {len(history_nodes)} 个")
+
+                            # 更新节点名称中的偏移
+                            if match:
+                                line = _replace_day_offset_in_raw(line, old_offset, new_offset)
+                            else:
+                                line = _add_day_offset_to_raw(line, new_offset)
+                            history_nodes.append(line)
+                        logger.info(f"  合并历史节点 {len(history_nodes)} 个（上次运行距今 {days_since_last_run} 天）")
         except Exception as e:
             logger.warning(f"  读取历史节点失败: {e}")
 

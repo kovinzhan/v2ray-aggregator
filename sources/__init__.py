@@ -10,6 +10,7 @@ import logging
 import importlib
 import pkgutil
 from abc import ABC, abstractmethod
+from datetime import datetime, date
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
@@ -35,26 +36,41 @@ class BaseSource(ABC):
         采集节点内容。
         返回：原始文本列表，每个元素是一段订阅内容（base64 或逐行节点链接）。
         抛出异常表示采集失败。
+
+        子类可重写 fetch_with_date() 返回带日期的结果，
+        也可只实现 fetch() 返回纯内容（日期默认为今天）。
         """
         ...
 
-    def safe_fetch(self) -> tuple[list[str], dict]:
+    def fetch_with_date(self) -> list[tuple[str, str]]:
+        """
+        采集节点内容并返回数据日期。
+        返回：[(content, date_str), ...]  date_str 格式为 "YYYY-MM-DD"
+        默认实现调用 fetch()，日期用今天。子类可重写以提供真实数据日期。
+        """
+        results = self.fetch()
+        today_str = date.today().strftime("%Y-%m-%d")
+        return [(content, today_str) for content in results]
+
+    def safe_fetch(self) -> tuple[list[tuple[str, str]], dict]:
         """
         安全包装，捕获异常并记录日志。
-        返回：(原始文本列表, 采集状态字典)
-        状态字典包含：name, success, content_count, error
+        返回：([(content, date_str), ...], 采集状态字典)
+        状态字典包含：name, success, content_count, error, data_date
         """
-        status = {"name": self.name, "success": False, "content_count": 0, "error": ""}
+        status = {"name": self.name, "success": False, "content_count": 0, "error": "", "data_date": ""}
         if not self.enabled:
             logger.debug(f"[{self.name}] 已禁用，跳过")
             status["error"] = "disabled"
             return [], status
         try:
-            results = self.fetch()
+            results = self.fetch_with_date()
             count = len(results)
             status["success"] = True
             status["content_count"] = count
-            logger.info(f"✓ [{self.name}] 采集成功，获取 {count} 段内容")
+            if results:
+                status["data_date"] = results[0][1]  # 记录数据日期
+            logger.info(f"✓ [{self.name}] 采集成功，获取 {count} 段内容（数据日期: {status['data_date']}）")
             return results, status
         except Exception as e:
             status["error"] = str(e)
@@ -101,17 +117,17 @@ def get_enabled_sources() -> list[BaseSource]:
     return [s for s in _registry.values() if s.enabled]
 
 
-def collect_all(max_workers=10, per_source_timeout=60) -> tuple[list[tuple[str, str]], list[dict]]:
+def collect_all(max_workers=10, per_source_timeout=60) -> tuple[list[tuple[str, str, str]], list[dict]]:
     """
     并发采集所有已启用源的内容。
     参数：
         - max_workers: 最大并发线程数，默认 5
         - per_source_timeout: 每个源的整体超时秒数，默认 60s
     返回：
-        - tagged_contents: [(source_name, raw_text), ...] 每段内容带源名称标记
-        - source_stats: [{"name":..., "success":..., "content_count":..., "error":...}, ...]
+        - tagged_contents: [(source_name, raw_text, data_date), ...] 每段内容带源名称和数据日期
+        - source_stats: [{"name":..., "success":..., "content_count":..., "error":..., "data_date":...}, ...]
     """
-    tagged_contents = []  # (source_name, raw_text)
+    tagged_contents = []  # (source_name, raw_text, data_date)
     source_stats = []
     sources = get_enabled_sources()
     logger.info(f"开始采集，共 {len(sources)} 个启用源（并发={max_workers}，单源超时={per_source_timeout}s）")
@@ -132,13 +148,14 @@ def collect_all(max_workers=10, per_source_timeout=60) -> tuple[list[tuple[str, 
                     "success": False,
                     "content_count": 0,
                     "error": f"整体超时或异常: {e}",
+                    "data_date": "",
                 }
                 results = []
                 logger.warning(f"✗ [{source.name}] 采集超时或异常: {e}")
 
             source_stats.append(status)
-            for content in results:
-                tagged_contents.append((source.name, content))
+            for content, data_date in results:
+                tagged_contents.append((source.name, content, data_date))
 
     success_count = sum(1 for s in source_stats if s["success"])
     fail_count = sum(1 for s in source_stats if not s["success"])
@@ -148,7 +165,7 @@ def collect_all(max_workers=10, per_source_timeout=60) -> tuple[list[tuple[str, 
     logger.info("各源采集状态：")
     for stat in source_stats:
         if stat["success"]:
-            logger.info(f"  ✓ {stat['name']}: 获取 {stat['content_count']} 段内容")
+            logger.info(f"  ✓ {stat['name']}: 获取 {stat['content_count']} 段内容（数据日期: {stat.get('data_date', '?')}）")
         else:
             logger.info(f"  ✗ {stat['name']}: 失败 ({stat['error']})")
 
