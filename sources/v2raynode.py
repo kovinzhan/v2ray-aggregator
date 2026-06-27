@@ -58,6 +58,9 @@ class V2RayNodeSource(BaseSource):
         for url in sub_links:
             try:
                 content = self.http_get_text(url, timeout=15)
+                # 排除 HTML 页面
+                if content.strip().startswith(('<', '<!')) and '<html' in content[:500].lower():
+                    continue
                 if any(proto in content for proto in ["vmess://", "vless://", "trojan://", "ss://"]) \
                         or len(content) > 100:
                     results.append(content)

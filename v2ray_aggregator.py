@@ -182,18 +182,168 @@ def parse_trojan(uri):
         return None
 
 
-def parse_nodes(tagged_contents):
+def _extract_country(original_name):
+    """
+    从节点原始名称中提取国家/地区信息。
+    支持格式：
+    - "US美国(...)" → "美国"
+    - "印度节点0207" → "印度"
+    - "🇺🇸 United States" → "美国"
+    - "香港01" → "香港"
+    - "JP-Tokyo" → "日本"
+    返回中文国家名，无法识别返回 "未知"
+    """
+    if not original_name:
+        return "未知"
+
+    # 国家关键词映射表（优先匹配中文，再匹配英文/代码）
+    COUNTRY_MAP = {
+        # 中文名称
+        "美国": "美国", "香港": "香港", "台湾": "台湾", "日本": "日本",
+        "韩国": "韩国", "新加坡": "新加坡", "英国": "英国", "德国": "德国",
+        "法国": "法国", "加拿大": "加拿大", "澳大利亚": "澳大利亚",
+        "澳洲": "澳大利亚", "印度": "印度", "俄罗斯": "俄罗斯",
+        "荷兰": "荷兰", "巴西": "巴西", "土耳其": "土耳其",
+        "阿根廷": "阿根廷", "越南": "越南", "泰国": "泰国",
+        "马来西亚": "马来西亚", "印尼": "印尼", "菲律宾": "菲律宾",
+        "意大利": "意大利", "西班牙": "西班牙", "瑞士": "瑞士",
+        "瑞典": "瑞典", "挪威": "挪威", "芬兰": "芬兰",
+        "波兰": "波兰", "乌克兰": "乌克兰", "以色列": "以色列",
+        "南非": "南非", "墨西哥": "墨西哥", "智利": "智利",
+        "哥伦比亚": "哥伦比亚", "爱尔兰": "爱尔兰", "新西兰": "新西兰",
+        "埃及": "埃及", "罗马尼亚": "罗马尼亚", "捷克": "捷克",
+        "匈牙利": "匈牙利", "奥地利": "奥地利", "比利时": "比利时",
+        "丹麦": "丹麦", "葡萄牙": "葡萄牙", "希腊": "希腊",
+        "哈萨克斯坦": "哈萨克斯坦", "巴基斯坦": "巴基斯坦",
+        "孟加拉": "孟加拉", "尼日利亚": "尼日利亚",
+        # 英文国家代码 / 名称
+        "US": "美国", "USA": "美国", "United States": "美国", "America": "美国",
+        "HK": "香港", "Hong Kong": "香港", "Hongkong": "香港",
+        "TW": "台湾", "Taiwan": "台湾",
+        "JP": "日本", "Japan": "日本",
+        "KR": "韩国", "Korea": "韩国", "South Korea": "韩国",
+        "SG": "新加坡", "Singapore": "新加坡",
+        "UK": "英国", "GB": "英国", "United Kingdom": "英国", "England": "英国",
+        "DE": "德国", "Germany": "德国",
+        "FR": "法国", "France": "法国",
+        "CA": "加拿大", "Canada": "加拿大",
+        "AU": "澳大利亚", "Australia": "澳大利亚",
+        "IN": "印度", "India": "印度",
+        "RU": "俄罗斯", "Russia": "俄罗斯",
+        "NL": "荷兰", "Netherlands": "荷兰",
+        "BR": "巴西", "Brazil": "巴西",
+        "TR": "土耳其", "Turkey": "土耳其", "Türkiye": "土耳其",
+        "AR": "阿根廷", "Argentina": "阿根廷",
+        "VN": "越南", "Vietnam": "越南",
+        "TH": "泰国", "Thailand": "泰国",
+        "MY": "马来西亚", "Malaysia": "马来西亚",
+        "ID": "印尼", "Indonesia": "印尼",
+        "PH": "菲律宾", "Philippines": "菲律宾",
+        "IT": "意大利", "Italy": "意大利",
+        "ES": "西班牙", "Spain": "西班牙",
+        "CH": "瑞士", "Switzerland": "瑞士",
+        "SE": "瑞典", "Sweden": "瑞典",
+        "NO": "挪威", "Norway": "挪威",
+        "FI": "芬兰", "Finland": "芬兰",
+        "PL": "波兰", "Poland": "波兰",
+        "UA": "乌克兰", "Ukraine": "乌克兰",
+        "IL": "以色列", "Israel": "以色列",
+        "ZA": "南非", "South Africa": "南非",
+        "MX": "墨西哥", "Mexico": "墨西哥",
+        "CL": "智利", "Chile": "智利",
+        "CO": "哥伦比亚", "Colombia": "哥伦比亚",
+        "IE": "爱尔兰", "Ireland": "爱尔兰",
+        "NZ": "新西兰", "New Zealand": "新西兰",
+    }
+
+    # 国旗 emoji 映射
+    FLAG_MAP = {
+        "🇺🇸": "美国", "🇭🇰": "香港", "🇹🇼": "台湾", "🇯🇵": "日本",
+        "🇰🇷": "韩国", "🇸🇬": "新加坡", "🇬🇧": "英国", "🇩🇪": "德国",
+        "🇫🇷": "法国", "🇨🇦": "加拿大", "🇦🇺": "澳大利亚", "🇮🇳": "印度",
+        "🇷🇺": "俄罗斯", "🇳🇱": "荷兰", "🇧🇷": "巴西", "🇹🇷": "土耳其",
+        "🇦🇷": "阿根廷", "🇻🇳": "越南", "🇹🇭": "泰国", "🇲🇾": "马来西亚",
+        "🇮🇩": "印尼", "🇵🇭": "菲律宾", "🇮🇹": "意大利", "🇪🇸": "西班牙",
+        "🇨🇭": "瑞士", "🇸🇪": "瑞典", "🇳🇴": "挪威", "🇫🇮": "芬兰",
+        "🇵🇱": "波兰", "🇺🇦": "乌克兰", "🇮🇱": "以色列", "🇿🇦": "南非",
+        "🇲🇽": "墨西哥",
+    }
+
+    # 先检查国旗 emoji
+    for flag, country in FLAG_MAP.items():
+        if flag in original_name:
+            return country
+
+    # 优先匹配中文国家名（更准确）
+    for keyword, country in COUNTRY_MAP.items():
+        # 中文直接 in 匹配
+        if len(keyword) >= 2 and keyword in original_name:
+            return country
+
+    # 匹配英文国家代码（需要独立词或在开头，避免误匹配）
+    name_upper = original_name.upper()
+    # 2字母国家代码需要在开头或有分隔符
+    two_letter_codes = ["US", "HK", "TW", "JP", "KR", "SG", "UK", "GB", "DE",
+                        "FR", "CA", "AU", "IN", "RU", "NL", "BR", "TR", "AR",
+                        "VN", "TH", "MY", "ID", "PH", "IT", "ES", "CH", "SE",
+                        "NO", "FI", "PL", "UA", "IL", "ZA", "MX", "CL", "CO",
+                        "IE", "NZ"]
+    for code in two_letter_codes:
+        # 匹配模式：开头 "US" 或 "US-" 或 "US_" 或 "US " 等
+        if re.match(rf'^{code}(?=[\W_]|$)', name_upper):
+            return COUNTRY_MAP[code]
+
+    return "未知"
+
+
+def _extract_country_from_address(address):
+    """
+    从节点地址（域名）中尝试提取国家信息。
+    如 v1hk5.example.com → 香港, us-west.example.com → 美国
+    """
+    if not address:
+        return None
+
+    addr_lower = address.lower()
+    # 域名中常见的国家/地区缩写模式（支持 v1hk5. 或 hk. 或 hk01. 等）
+    ADDR_PATTERNS = {
+        r'hk\d*\.': "香港", r'hkg\d*\.': "香港",
+        r'us\d*\.': "美国", r'usa\d*\.': "美国",
+        r'jp\d*\.': "日本", r'jpn\d*\.': "日本",
+        r'kr\d*\.': "韩国", r'kor\d*\.': "韩国",
+        r'sg\d*\.': "新加坡", r'sgp\d*\.': "新加坡",
+        r'tw\d*\.': "台湾",
+        r'de\d*\.': "德国", r'ger\d*\.': "德国",
+        r'fr\d*\.': "法国",
+        r'uk\d*\.': "英国", r'gb\d*\.': "英国",
+        r'ca\d*\.': "加拿大",
+        r'au\d*\.': "澳大利亚",
+        r'in\d*\.': "印度", r'ind\d*\.': "印度",
+        r'ru\d*\.': "俄罗斯",
+        r'nl\d*\.': "荷兰",
+        r'tr\d*\.': "土耳其",
+    }
+    for pattern, country in ADDR_PATTERNS.items():
+        if re.search(pattern, addr_lower):
+            return country
+
+    return None
+
+
+def parse_nodes(tagged_contents, day_offset=0):
     """
     解析所有订阅内容为节点列表。
-    参数：tagged_contents = [(source_name, raw_text), ...]
-    每个节点的 name 格式为 "[源名称][月日][IP]"，如 "[mibei77][0627][1.1.1.1]"
+    参数：
+        tagged_contents = [(source_name, raw_text), ...]
+        day_offset: 天数偏移（0=今天, -1=昨天, 1=明天）
+    每个节点的 name 格式为 "[day_offset][国家][源名称][IP:端口]"
+    如 "[0][美国][mibei77][1.1.1.1:443]" 或 "[-1][日本][hysteria350][2.2.2.2:8080]"
     返回：(nodes, per_source_node_counts)
         - nodes: 节点列表
         - per_source_node_counts: {source_name: node_count} 每源解析到的节点数
     """
     nodes = []
     per_source_node_counts = {}
-    date_tag = datetime.now().strftime("%m%d")  # 当前月日，如 "0627"
     parsers = {
         "vmess://": parse_vmess,
         "vless://": parse_vless,
@@ -216,9 +366,16 @@ def parse_nodes(tagged_contents):
                 if line.startswith(prefix):
                     node = parser(line)
                     if node and node["address"] and node["port"]:
-                        # 节点名称格式：[源名称][月日][IP:端口]
-                        node["name"] = f"[{source_name}][{date_tag}][{node['address']}:{node['port']}]"
+                        # 从原始名称中提取国家信息，fallback 到域名解析
+                        country = _extract_country(node.get("name", ""))
+                        if country == "未知":
+                            addr_country = _extract_country_from_address(node["address"])
+                            if addr_country:
+                                country = addr_country
+                        # 节点名称格式：[天数偏移][国家][源名称][IP:端口]
+                        node["name"] = f"[{day_offset}][{country}][{source_name}][{node['address']}:{node['port']}]"
                         node["source"] = source_name
+                        node["country"] = country
                         # 同步更新 raw URI 中的名称（vmess 需要特殊处理）
                         node["raw"] = _rebuild_raw_with_name(node)
                         nodes.append(node)
@@ -1314,6 +1471,7 @@ def main():
     parser.add_argument("--no-xray", action="store_true", help="禁用 xray-core 真实代理测试（只用 TCP/TLS 初筛）")
     parser.add_argument("--timeout", type=int, default=TEST_CONFIG["tcp_ping_timeout"], help="单次超时秒数 (默认5)")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细测速日志")
+    parser.add_argument("--day-offset", type=int, default=0, help="天数偏移（0=今天, -1=昨天），显示在节点名称中")
     args = parser.parse_args()
 
     TEST_CONFIG["max_workers"] = args.workers
@@ -1343,7 +1501,7 @@ def main():
 
     # Step 2: 解析去重
     logger.info("\n[2/4] 解析节点并去重...")
-    nodes, per_source_node_counts = parse_nodes(tagged_contents)
+    nodes, per_source_node_counts = parse_nodes(tagged_contents, day_offset=args.day_offset)
     logger.info(f"  解析得到 {len(nodes)} 个节点")
 
     # 输出每个源解析到的节点数

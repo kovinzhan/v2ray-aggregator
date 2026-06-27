@@ -44,12 +44,14 @@ class PasswallSource(BaseSource):
         # 访问文章详情页
         page = self.http_get_text(target_url, timeout=15)
 
-        # 提取订阅链接
+        # 提取订阅链接（排除 .htm/.html 页面自身）
         sub_links = re.findall(
             r'(https?://[^\s<"\']+?(?:\.txt|\.yaml|/sub\?[^\s<"\']*|subscribe[^\s<"\']*))',
             page
         )
 
+        # 过滤掉 HTML 页面链接和自身链接
+        sub_links = [u for u in sub_links if not u.endswith(('.htm', '.html')) and 'passwall.wiki/free-node/' not in u]
         sub_links = list(dict.fromkeys(sub_links))
 
         if not sub_links:
@@ -59,6 +61,9 @@ class PasswallSource(BaseSource):
         for url in sub_links:
             try:
                 content = self.http_get_text(url, timeout=15)
+                # 排除 HTML 页面
+                if content.strip().startswith(('<', '<!')) and '<html' in content[:500].lower():
+                    continue
                 if any(proto in content for proto in ["vmess://", "vless://", "trojan://", "ss://"]) \
                         or len(content) > 100:
                     results.append(content)

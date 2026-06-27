@@ -8,6 +8,7 @@ https://yoyapai.com/category/mianfeijiedian
 """
 
 import re
+from html import unescape
 from . import BaseSource, register
 
 
@@ -35,19 +36,19 @@ class YoyapaiSource(BaseSource):
         article_urls.sort(key=lambda u: int(u.split('/')[-1]), reverse=True)
         target_url = article_urls[0]
 
-        # 访问文章详情页
-        page = self.http_get_text(target_url, timeout=15)
+        # 访问文章详情页（HTML 实体解码，因为链接中的 :// 可能被编码为 &#47;&#47;）
+        page = unescape(self.http_get_text(target_url, timeout=15))
 
-        # 提取 freenode.yoyapai.com 的订阅链接
+        # 提取 freenode.yoyapai.com 的订阅链接（.txt 和 .yaml）
         sub_links = re.findall(
-            r'(https?://freenode\.yoyapai\.com/[^\s<"\']+?\.txt)',
+            r'(https?://freenode\.yoyapai\.com/[^\s<>"\']+?\.(?:txt|yaml))',
             page
         )
 
-        # 如果没有 .txt 链接，也尝试匹配其他格式
+        # 如果没有匹配到，尝试更宽泛的格式
         if not sub_links:
             sub_links = re.findall(
-                r'(https?://freenode\.yoyapai\.com/[^\s<"\']+)',
+                r'(https?://freenode\.yoyapai\.com/[^\s<>"\']+)',
                 page
             )
 
