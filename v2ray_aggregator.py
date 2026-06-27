@@ -1195,49 +1195,31 @@ def get_local_ip():
     return None
 
 
-def batch_xray_test(xray_bin, candidate_nodes):
+def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_workers, test_count, timeout, startup_wait, local_ip):
     """
-    单进程多节点并发测速：
-    1. 为所有候选节点分配端口，生成一个合并配置
-    2. 启动 1 个 xray 进程（所有节点共享）
-    3. 并发通过各端口测速（含出口 IP 验证，确保流量真正走了代理）
-    4. 关闭进程，清理资源
+    对一批节点执行 xray 真实代理测速（内部函数）。
+    每批启动一个独立的 xray 进程，避免 inbounds 过多导致启动失败。
     """
-    config = TEST_CONFIG
-    total = len(candidate_nodes)
-    max_workers = config.get("xray_max_workers", 5)
-    test_count = config.get("xray_test_count", 3)
-    timeout = config.get("xray_test_timeout", 10)
-    startup_wait = config.get("xray_startup_wait", 2)
-
-    logger.info(f"  xray 真实代理测速（单进程模式）：{total} 个候选，并发 {max_workers}")
-    logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
-
-    # 获取本机公网 IP，用于后续验证代理出口是否不同
-    local_ip = get_local_ip()
-    if local_ip:
-        logger.info(f"  本机公网 IP: {local_ip}（代理出口 IP 必须与此不同）")
-    else:
-        logger.warning("  无法获取本机公网 IP，跳过出口 IP 验证")
+    batch_size = len(batch_nodes)
+    results = []
 
     # 1. 分配端口
-    ports = find_free_ports(total)
-    nodes_with_ports = list(zip(candidate_nodes, ports))
+    ports = find_free_ports(batch_size)
+    nodes_with_ports = list(zip(batch_nodes, ports))
 
     # 2. 生成合并配置
     xray_config, failed_indices = build_xray_multi_config(nodes_with_ports)
 
-    results = []
     # 记录配置构建失败的节点
     for idx in failed_indices:
-        node = candidate_nodes[idx]
+        node = batch_nodes[idx]
         results.append({
             **node, "xray_ok": False, "xray_avg_ms": float("inf"),
             "xray_latencies": [], "xray_error": "config_build_failed",
         })
 
     if xray_config is None:
-        logger.warning("  所有节点配置构建失败，跳过 xray 测速")
+        logger.warning(f"  [批次 {batch_idx+1}/{total_batches}] 所有节点配置构建失败，跳过")
         return results
 
     # 3. 写配置 & 启动 xray
@@ -1247,27 +1229,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
 
     xray_proc = None
     try:
-        # 先验证 xray 二进制可执行性
-        try:
-            version_result = subprocess.run(
-                [xray_bin, "version"],
-                capture_output=True, timeout=10,
-            )
-            logger.info(f"  xray 版本: {version_result.stdout.decode(errors='ignore').splitlines()[0] if version_result.stdout else '未知'}")
-            if version_result.returncode != 0:
-                err_msg = version_result.stderr.decode(errors="ignore")[:300]
-                logger.error(f"  xray 二进制不可用: {err_msg}")
-                for idx, (node, _) in enumerate(nodes_with_ports):
-                    if idx not in failed_indices:
-                        results.append({
-                            **node, "xray_ok": False, "xray_avg_ms": float("inf"),
-                            "xray_latencies": [], "xray_error": f"xray_binary_invalid: {err_msg[:100]}",
-                        })
-                return results
-        except Exception as ve:
-            logger.error(f"  xray 二进制验证失败: {ve}")
-
-        # 启动 xray 进程，同时捕获 stdout 和 stderr 以便调试
+        # 启动 xray 进程
         xray_proc = subprocess.Popen(
             [xray_bin, "run", "-c", str(config_file)],
             stdout=subprocess.PIPE,
@@ -1275,7 +1237,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
             preexec_fn=os.setsid if platform.system() != "Windows" else None,
         )
 
-        # 等待 xray 启动，逐步检查（最多等 startup_wait * 2 秒）
+        # 等待 xray 启动
         max_wait = startup_wait * 2
         waited = 0
         check_interval = 0.5
@@ -1284,7 +1246,6 @@ def batch_xray_test(xray_bin, candidate_nodes):
             waited += check_interval
             if xray_proc.poll() is not None:
                 break
-            # 尝试连接第一个节点的端口来确认 xray 已就绪
             if waited >= startup_wait:
                 first_testable = next(
                     ((idx, port) for idx, (_, port) in enumerate(nodes_with_ports) if idx not in failed_indices),
@@ -1296,7 +1257,6 @@ def batch_xray_test(xray_bin, candidate_nodes):
                         test_sock.settimeout(1)
                         test_sock.connect(("127.0.0.1", first_testable[1]))
                         test_sock.close()
-                        logger.info(f"  xray 端口就绪（等待 {waited:.1f}s）")
                         break
                     except Exception:
                         pass
@@ -1305,26 +1265,18 @@ def batch_xray_test(xray_bin, candidate_nodes):
             stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:500]
             stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:500]
             exit_code = xray_proc.returncode
-            logger.error(f"  xray 进程启动失败 (exit_code={exit_code})")
-            if stderr_out:
-                logger.error(f"  stderr: {stderr_out}")
+            logger.error(f"  [批次 {batch_idx+1}/{total_batches}] xray 启动失败 (exit_code={exit_code})")
             if stdout_out:
-                logger.error(f"  stdout: {stdout_out}")
-            # 记录配置文件内容（前500字符）用于调试
-            try:
-                cfg_preview = config_file.read_text()[:500]
-                logger.error(f"  配置预览: {cfg_preview}")
-            except Exception:
-                pass
+                logger.error(f"  stdout: {stdout_out[:200]}")
+            if stderr_out:
+                logger.error(f"  stderr: {stderr_out[:200]}")
             for idx, (node, _) in enumerate(nodes_with_ports):
                 if idx not in failed_indices:
                     results.append({
                         **node, "xray_ok": False, "xray_avg_ms": float("inf"),
-                        "xray_latencies": [], "xray_error": f"xray_crashed(exit={exit_code}): {stderr_out[:100]}",
+                        "xray_latencies": [], "xray_error": f"xray_crashed(exit={exit_code})",
                     })
             return results
-
-        logger.info(f"  xray 进程已启动 (PID={xray_proc.pid})，开始并发测速...")
 
         # 4. 并发测所有节点
         testable = [(idx, node, port) for idx, (node, port) in enumerate(nodes_with_ports)
@@ -1353,7 +1305,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
                     exit_ip = result.get("exit_ip", "")
                     ip_info = f" [出口:{exit_ip}]" if exit_ip else ""
                     logger.info(
-                        f"  [{done_count}/{len(testable)}] {status} {node['address']}:{node['port']} "
+                        f"  [批{batch_idx+1}][{done_count}/{len(testable)}] {status} {node['address']}:{node['port']} "
                         f"→ {avg}ms {f'({err})' if err else ''}{verified}{ip_info} {name}"
                     )
                 except Exception as e:
@@ -1361,12 +1313,12 @@ def batch_xray_test(xray_bin, candidate_nodes):
                         **node, "xray_ok": False, "xray_avg_ms": float("inf"),
                         "xray_latencies": [], "xray_error": str(e),
                     })
-                    logger.warning(f"  [{done_count}/{len(testable)}] 测试异常: {e}")
+                    logger.warning(f"  [批{batch_idx+1}][{done_count}/{len(testable)}] 测试异常: {e}")
 
     except Exception as e:
-        logger.error(f"  xray 测速整体异常: {e}")
+        logger.error(f"  [批次 {batch_idx+1}/{total_batches}] xray 测速异常: {e}")
     finally:
-        # 清理：杀掉唯一的 xray 进程
+        # 清理：杀掉 xray 进程
         if xray_proc and xray_proc.poll() is None:
             try:
                 if platform.system() != "Windows":
@@ -1379,10 +1331,77 @@ def batch_xray_test(xray_bin, candidate_nodes):
                     xray_proc.kill()
                 except Exception:
                     pass
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        # 清理临时目录
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
-    logger.info(f"  xray 测速完成，共 {len(results)} 个结果")
     return results
+
+
+def batch_xray_test(xray_bin, candidate_nodes):
+    """
+    分批多进程测速：将候选节点分成多批，每批启动一个 xray 进程。
+    避免单进程 inbounds 过多（500+）导致 xray 启动失败。
+    每批最多 BATCH_SIZE 个节点。
+    """
+    BATCH_SIZE = 50  # 每批最多 50 个节点
+    config = TEST_CONFIG
+    total = len(candidate_nodes)
+    max_workers = config.get("xray_max_workers", 20)
+    test_count = config.get("xray_test_count", 3)
+    timeout = config.get("xray_test_timeout", 10)
+    startup_wait = config.get("xray_startup_wait", 2)
+
+    # 计算批次
+    num_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
+    logger.info(f"  xray 真实代理测速（分批模式）：{total} 个候选，分 {num_batches} 批（每批≤{BATCH_SIZE}），并发 {max_workers}")
+    logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
+
+    # 获取本机公网 IP
+    local_ip = get_local_ip()
+    if local_ip:
+        logger.info(f"  本机公网 IP: {local_ip}（代理出口 IP 必须与此不同）")
+    else:
+        logger.warning("  无法获取本机公网 IP，跳过出口 IP 验证")
+
+    # 先验证 xray 二进制可执行性
+    try:
+        version_result = subprocess.run(
+            [xray_bin, "version"],
+            capture_output=True, timeout=10,
+        )
+        logger.info(f"  xray 版本: {version_result.stdout.decode(errors='ignore').splitlines()[0] if version_result.stdout else '未知'}")
+        if version_result.returncode != 0:
+            err_msg = version_result.stderr.decode(errors="ignore")[:300]
+            logger.error(f"  xray 二进制不可用: {err_msg}")
+            return [{
+                **node, "xray_ok": False, "xray_avg_ms": float("inf"),
+                "xray_latencies": [], "xray_error": f"xray_binary_invalid: {err_msg[:100]}",
+            } for node in candidate_nodes]
+    except Exception as ve:
+        logger.error(f"  xray 二进制验证失败: {ve}")
+
+    # 分批执行
+    all_results = []
+    for batch_idx in range(num_batches):
+        start = batch_idx * BATCH_SIZE
+        end = min(start + BATCH_SIZE, total)
+        batch_nodes = candidate_nodes[start:end]
+        logger.info(f"  [批次 {batch_idx+1}/{num_batches}] 测试节点 {start+1}-{end}（共 {len(batch_nodes)} 个）...")
+
+        batch_results = _xray_test_batch(
+            xray_bin, batch_nodes, batch_idx, num_batches,
+            max_workers, test_count, timeout, startup_wait, local_ip
+        )
+        all_results.extend(batch_results)
+
+        # 批次间短暂等待，释放端口
+        if batch_idx < num_batches - 1:
+            time.sleep(1)
+
+    return all_results
 
 
 # ============================================================
