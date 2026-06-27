@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-27T07:44:28.355513",
+  "generated_at": "2026-06-27T07:51:05.826224",
   "test_config": {
     "rounds": 2,
     "pings_per_round": 3,
@@ -32,13 +32,6 @@
       "error": "文章页 https://yoyapai.com/564 中未找到订阅链接"
     },
     {
-      "name": "clashmeta",
-      "success": true,
-      "content_count": 8,
-      "node_count": 1014,
-      "error": ""
-    },
-    {
       "name": "passwall",
       "success": true,
       "content_count": 8,
@@ -50,6 +43,13 @@
       "success": true,
       "content_count": 3,
       "node_count": 979,
+      "error": ""
+    },
+    {
+      "name": "clashmeta",
+      "success": true,
+      "content_count": 8,
+      "node_count": 1014,
       "error": ""
     },
     {
