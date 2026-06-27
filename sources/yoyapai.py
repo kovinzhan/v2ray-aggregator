@@ -15,7 +15,7 @@ from . import BaseSource, register
 @register
 class YoyapaiSource(BaseSource):
     name = "yoyapai"
-    enabled = False  # 暂时禁用，快速验证 xray 配置
+
 
     SITEMAP_URL = "https://yoyapai.com/wp-sitemap-posts-post-1.xml"
 

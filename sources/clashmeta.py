@@ -13,6 +13,7 @@ from . import BaseSource, register
 @register
 class ClashMetaSource(BaseSource):
     name = "clashmeta"
+    enabled = False  # 暂时禁用
 
 
     SITEMAP_URL = "https://clashmeta.top/sitemap.xml"

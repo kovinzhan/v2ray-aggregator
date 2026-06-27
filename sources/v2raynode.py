@@ -14,7 +14,7 @@ from . import BaseSource, register
 @register
 class V2RayNodeSource(BaseSource):
     name = "v2raynode"
-    enabled = False  # 暂时禁用，快速验证 xray 配置
+
 
     SITEMAP_URL = "https://v2raynode.top/sitemap.xml"
 
