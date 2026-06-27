@@ -43,7 +43,7 @@ except ImportError:
 TEST_CONFIG = {
     "tcp_ping_count": 3,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
     "tcp_ping_timeout": 5,      # 单次超时（秒）
-    "max_workers": 100,         # 并发测试线程数
+    "max_workers": 30,          # 并发测试线程数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     "max_loss_rate": 0.4,       # 最大可接受丢包率
     "test_rounds": 2,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）
@@ -55,7 +55,7 @@ TEST_CONFIG = {
     "xray_test_count": 3,       # 每个节点通过代理请求次数
     "xray_test_timeout": 10,    # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
-    "xray_max_workers": 50,     # xray 测试并发数
+    "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
 }
 
 # HTTP 请求头
@@ -182,168 +182,18 @@ def parse_trojan(uri):
         return None
 
 
-def _extract_country(original_name):
-    """
-    从节点原始名称中提取国家/地区信息。
-    支持格式：
-    - "US美国(...)" → "美国"
-    - "印度节点0207" → "印度"
-    - "🇺🇸 United States" → "美国"
-    - "香港01" → "香港"
-    - "JP-Tokyo" → "日本"
-    返回中文国家名，无法识别返回 "未知"
-    """
-    if not original_name:
-        return "未知"
-
-    # 国家关键词映射表（优先匹配中文，再匹配英文/代码）
-    COUNTRY_MAP = {
-        # 中文名称
-        "美国": "美国", "香港": "香港", "台湾": "台湾", "日本": "日本",
-        "韩国": "韩国", "新加坡": "新加坡", "英国": "英国", "德国": "德国",
-        "法国": "法国", "加拿大": "加拿大", "澳大利亚": "澳大利亚",
-        "澳洲": "澳大利亚", "印度": "印度", "俄罗斯": "俄罗斯",
-        "荷兰": "荷兰", "巴西": "巴西", "土耳其": "土耳其",
-        "阿根廷": "阿根廷", "越南": "越南", "泰国": "泰国",
-        "马来西亚": "马来西亚", "印尼": "印尼", "菲律宾": "菲律宾",
-        "意大利": "意大利", "西班牙": "西班牙", "瑞士": "瑞士",
-        "瑞典": "瑞典", "挪威": "挪威", "芬兰": "芬兰",
-        "波兰": "波兰", "乌克兰": "乌克兰", "以色列": "以色列",
-        "南非": "南非", "墨西哥": "墨西哥", "智利": "智利",
-        "哥伦比亚": "哥伦比亚", "爱尔兰": "爱尔兰", "新西兰": "新西兰",
-        "埃及": "埃及", "罗马尼亚": "罗马尼亚", "捷克": "捷克",
-        "匈牙利": "匈牙利", "奥地利": "奥地利", "比利时": "比利时",
-        "丹麦": "丹麦", "葡萄牙": "葡萄牙", "希腊": "希腊",
-        "哈萨克斯坦": "哈萨克斯坦", "巴基斯坦": "巴基斯坦",
-        "孟加拉": "孟加拉", "尼日利亚": "尼日利亚",
-        # 英文国家代码 / 名称
-        "US": "美国", "USA": "美国", "United States": "美国", "America": "美国",
-        "HK": "香港", "Hong Kong": "香港", "Hongkong": "香港",
-        "TW": "台湾", "Taiwan": "台湾",
-        "JP": "日本", "Japan": "日本",
-        "KR": "韩国", "Korea": "韩国", "South Korea": "韩国",
-        "SG": "新加坡", "Singapore": "新加坡",
-        "UK": "英国", "GB": "英国", "United Kingdom": "英国", "England": "英国",
-        "DE": "德国", "Germany": "德国",
-        "FR": "法国", "France": "法国",
-        "CA": "加拿大", "Canada": "加拿大",
-        "AU": "澳大利亚", "Australia": "澳大利亚",
-        "IN": "印度", "India": "印度",
-        "RU": "俄罗斯", "Russia": "俄罗斯",
-        "NL": "荷兰", "Netherlands": "荷兰",
-        "BR": "巴西", "Brazil": "巴西",
-        "TR": "土耳其", "Turkey": "土耳其", "Türkiye": "土耳其",
-        "AR": "阿根廷", "Argentina": "阿根廷",
-        "VN": "越南", "Vietnam": "越南",
-        "TH": "泰国", "Thailand": "泰国",
-        "MY": "马来西亚", "Malaysia": "马来西亚",
-        "ID": "印尼", "Indonesia": "印尼",
-        "PH": "菲律宾", "Philippines": "菲律宾",
-        "IT": "意大利", "Italy": "意大利",
-        "ES": "西班牙", "Spain": "西班牙",
-        "CH": "瑞士", "Switzerland": "瑞士",
-        "SE": "瑞典", "Sweden": "瑞典",
-        "NO": "挪威", "Norway": "挪威",
-        "FI": "芬兰", "Finland": "芬兰",
-        "PL": "波兰", "Poland": "波兰",
-        "UA": "乌克兰", "Ukraine": "乌克兰",
-        "IL": "以色列", "Israel": "以色列",
-        "ZA": "南非", "South Africa": "南非",
-        "MX": "墨西哥", "Mexico": "墨西哥",
-        "CL": "智利", "Chile": "智利",
-        "CO": "哥伦比亚", "Colombia": "哥伦比亚",
-        "IE": "爱尔兰", "Ireland": "爱尔兰",
-        "NZ": "新西兰", "New Zealand": "新西兰",
-    }
-
-    # 国旗 emoji 映射
-    FLAG_MAP = {
-        "🇺🇸": "美国", "🇭🇰": "香港", "🇹🇼": "台湾", "🇯🇵": "日本",
-        "🇰🇷": "韩国", "🇸🇬": "新加坡", "🇬🇧": "英国", "🇩🇪": "德国",
-        "🇫🇷": "法国", "🇨🇦": "加拿大", "🇦🇺": "澳大利亚", "🇮🇳": "印度",
-        "🇷🇺": "俄罗斯", "🇳🇱": "荷兰", "🇧🇷": "巴西", "🇹🇷": "土耳其",
-        "🇦🇷": "阿根廷", "🇻🇳": "越南", "🇹🇭": "泰国", "🇲🇾": "马来西亚",
-        "🇮🇩": "印尼", "🇵🇭": "菲律宾", "🇮🇹": "意大利", "🇪🇸": "西班牙",
-        "🇨🇭": "瑞士", "🇸🇪": "瑞典", "🇳🇴": "挪威", "🇫🇮": "芬兰",
-        "🇵🇱": "波兰", "🇺🇦": "乌克兰", "🇮🇱": "以色列", "🇿🇦": "南非",
-        "🇲🇽": "墨西哥",
-    }
-
-    # 先检查国旗 emoji
-    for flag, country in FLAG_MAP.items():
-        if flag in original_name:
-            return country
-
-    # 优先匹配中文国家名（更准确）
-    for keyword, country in COUNTRY_MAP.items():
-        # 中文直接 in 匹配
-        if len(keyword) >= 2 and keyword in original_name:
-            return country
-
-    # 匹配英文国家代码（需要独立词或在开头，避免误匹配）
-    name_upper = original_name.upper()
-    # 2字母国家代码需要在开头或有分隔符
-    two_letter_codes = ["US", "HK", "TW", "JP", "KR", "SG", "UK", "GB", "DE",
-                        "FR", "CA", "AU", "IN", "RU", "NL", "BR", "TR", "AR",
-                        "VN", "TH", "MY", "ID", "PH", "IT", "ES", "CH", "SE",
-                        "NO", "FI", "PL", "UA", "IL", "ZA", "MX", "CL", "CO",
-                        "IE", "NZ"]
-    for code in two_letter_codes:
-        # 匹配模式：开头 "US" 或 "US-" 或 "US_" 或 "US " 等
-        if re.match(rf'^{code}(?=[\W_]|$)', name_upper):
-            return COUNTRY_MAP[code]
-
-    return "未知"
-
-
-def _extract_country_from_address(address):
-    """
-    从节点地址（域名）中尝试提取国家信息。
-    如 v1hk5.example.com → 香港, us-west.example.com → 美国
-    """
-    if not address:
-        return None
-
-    addr_lower = address.lower()
-    # 域名中常见的国家/地区缩写模式（支持 v1hk5. 或 hk. 或 hk01. 等）
-    ADDR_PATTERNS = {
-        r'hk\d*\.': "香港", r'hkg\d*\.': "香港",
-        r'us\d*\.': "美国", r'usa\d*\.': "美国",
-        r'jp\d*\.': "日本", r'jpn\d*\.': "日本",
-        r'kr\d*\.': "韩国", r'kor\d*\.': "韩国",
-        r'sg\d*\.': "新加坡", r'sgp\d*\.': "新加坡",
-        r'tw\d*\.': "台湾",
-        r'de\d*\.': "德国", r'ger\d*\.': "德国",
-        r'fr\d*\.': "法国",
-        r'uk\d*\.': "英国", r'gb\d*\.': "英国",
-        r'ca\d*\.': "加拿大",
-        r'au\d*\.': "澳大利亚",
-        r'in\d*\.': "印度", r'ind\d*\.': "印度",
-        r'ru\d*\.': "俄罗斯",
-        r'nl\d*\.': "荷兰",
-        r'tr\d*\.': "土耳其",
-    }
-    for pattern, country in ADDR_PATTERNS.items():
-        if re.search(pattern, addr_lower):
-            return country
-
-    return None
-
-
-def parse_nodes(tagged_contents, day_offset=0):
+def parse_nodes(tagged_contents):
     """
     解析所有订阅内容为节点列表。
-    参数：
-        tagged_contents = [(source_name, raw_text), ...]
-        day_offset: 天数偏移（0=今天, -1=昨天, 1=明天）
-    每个节点的 name 格式为 "[day_offset][国家][源名称][IP:端口]"
-    如 "[0][美国][mibei77][1.1.1.1:443]" 或 "[-1][日本][hysteria350][2.2.2.2:8080]"
+    参数：tagged_contents = [(source_name, raw_text), ...]
+    每个节点的 name 格式为 "[源名称][月日][IP]"，如 "[mibei77][0627][1.1.1.1]"
     返回：(nodes, per_source_node_counts)
         - nodes: 节点列表
         - per_source_node_counts: {source_name: node_count} 每源解析到的节点数
     """
     nodes = []
     per_source_node_counts = {}
+    date_tag = datetime.now().strftime("%m%d")  # 当前月日，如 "0627"
     parsers = {
         "vmess://": parse_vmess,
         "vless://": parse_vless,
@@ -366,16 +216,9 @@ def parse_nodes(tagged_contents, day_offset=0):
                 if line.startswith(prefix):
                     node = parser(line)
                     if node and node["address"] and node["port"]:
-                        # 从原始名称中提取国家信息，fallback 到域名解析
-                        country = _extract_country(node.get("name", ""))
-                        if country == "未知":
-                            addr_country = _extract_country_from_address(node["address"])
-                            if addr_country:
-                                country = addr_country
-                        # 节点名称格式：[天数偏移][国家][源名称][IP:端口]
-                        node["name"] = f"[{day_offset}][{country}][{source_name}][{node['address']}:{node['port']}]"
+                        # 节点名称格式：[源名称][月日][IP:端口]
+                        node["name"] = f"[{source_name}][{date_tag}][{node['address']}:{node['port']}]"
                         node["source"] = source_name
-                        node["country"] = country
                         # 同步更新 raw URI 中的名称（vmess 需要特殊处理）
                         node["raw"] = _rebuild_raw_with_name(node)
                         nodes.append(node)
@@ -696,17 +539,6 @@ def build_xray_outbound(node, tag="proxy"):
     port = node["port"]
     raw_uri = node["raw"]
 
-    # 基本参数校验：过滤掉无效节点
-    if not address or not port or port <= 0 or port > 65535:
-        return None
-    if not raw_uri:
-        return None
-    # 确保 port 为整数
-    try:
-        port = int(port)
-    except (ValueError, TypeError):
-        return None
-
     # xray 支持的传输协议白名单
     SUPPORTED_NETWORKS = {"tcp", "ws", "grpc", "h2", "http", "kcp", "quic",
                           "httpupgrade", "splithttp", "xhttp"}
@@ -765,9 +597,6 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
 
-        vmess_id = decoded.get("id", "")
-        if not vmess_id:
-            return None
         outbound = {
             "tag": tag,
             "protocol": "vmess",
@@ -775,7 +604,7 @@ def build_xray_outbound(node, tag="proxy"):
                 "address": address,
                 "port": port,
                 "users": [{
-                    "id": vmess_id,
+                    "id": decoded.get("id", ""),
                     "alterId": int(decoded.get("aid", 0)),
                     "security": decoded.get("scy", "auto"),
                 }],
@@ -787,8 +616,6 @@ def build_xray_outbound(node, tag="proxy"):
         parsed = urllib.parse.urlparse(raw_uri)
         params = dict(urllib.parse.parse_qsl(parsed.query))
         uuid = parsed.username or ""
-        if not uuid:
-            return None
 
         net = params.get("type", "tcp")
         security = params.get("security", "none")
@@ -876,8 +703,6 @@ def build_xray_outbound(node, tag="proxy"):
         parsed = urllib.parse.urlparse(raw_uri)
         params = dict(urllib.parse.parse_qsl(parsed.query))
         password = parsed.username or ""
-        if not password:
-            return None
 
         net = params.get("type", "tcp")
         security = params.get("security", "tls")
@@ -1213,31 +1038,49 @@ def get_local_ip():
     return None
 
 
-def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_workers, test_count, timeout, startup_wait, local_ip):
+def batch_xray_test(xray_bin, candidate_nodes):
     """
-    对一批节点执行 xray 真实代理测速（内部函数）。
-    每批启动一个独立的 xray 进程，避免 inbounds 过多导致启动失败。
+    单进程多节点并发测速：
+    1. 为所有候选节点分配端口，生成一个合并配置
+    2. 启动 1 个 xray 进程（所有节点共享）
+    3. 并发通过各端口测速（含出口 IP 验证，确保流量真正走了代理）
+    4. 关闭进程，清理资源
     """
-    batch_size = len(batch_nodes)
-    results = []
+    config = TEST_CONFIG
+    total = len(candidate_nodes)
+    max_workers = config.get("xray_max_workers", 5)
+    test_count = config.get("xray_test_count", 3)
+    timeout = config.get("xray_test_timeout", 10)
+    startup_wait = config.get("xray_startup_wait", 2)
+
+    logger.info(f"  xray 真实代理测速（单进程模式）：{total} 个候选，并发 {max_workers}")
+    logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
+
+    # 获取本机公网 IP，用于后续验证代理出口是否不同
+    local_ip = get_local_ip()
+    if local_ip:
+        logger.info(f"  本机公网 IP: {local_ip}（代理出口 IP 必须与此不同）")
+    else:
+        logger.warning("  无法获取本机公网 IP，跳过出口 IP 验证")
 
     # 1. 分配端口
-    ports = find_free_ports(batch_size)
-    nodes_with_ports = list(zip(batch_nodes, ports))
+    ports = find_free_ports(total)
+    nodes_with_ports = list(zip(candidate_nodes, ports))
 
     # 2. 生成合并配置
     xray_config, failed_indices = build_xray_multi_config(nodes_with_ports)
 
+    results = []
     # 记录配置构建失败的节点
     for idx in failed_indices:
-        node = batch_nodes[idx]
+        node = candidate_nodes[idx]
         results.append({
             **node, "xray_ok": False, "xray_avg_ms": float("inf"),
             "xray_latencies": [], "xray_error": "config_build_failed",
         })
 
     if xray_config is None:
-        logger.warning(f"  [批次 {batch_idx+1}/{total_batches}] 所有节点配置构建失败，跳过")
+        logger.warning("  所有节点配置构建失败，跳过 xray 测速")
         return results
 
     # 3. 写配置 & 启动 xray
@@ -1247,7 +1090,27 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
 
     xray_proc = None
     try:
-        # 启动 xray 进程
+        # 先验证 xray 二进制可执行性
+        try:
+            version_result = subprocess.run(
+                [xray_bin, "version"],
+                capture_output=True, timeout=10,
+            )
+            logger.info(f"  xray 版本: {version_result.stdout.decode(errors='ignore').splitlines()[0] if version_result.stdout else '未知'}")
+            if version_result.returncode != 0:
+                err_msg = version_result.stderr.decode(errors="ignore")[:300]
+                logger.error(f"  xray 二进制不可用: {err_msg}")
+                for idx, (node, _) in enumerate(nodes_with_ports):
+                    if idx not in failed_indices:
+                        results.append({
+                            **node, "xray_ok": False, "xray_avg_ms": float("inf"),
+                            "xray_latencies": [], "xray_error": f"xray_binary_invalid: {err_msg[:100]}",
+                        })
+                return results
+        except Exception as ve:
+            logger.error(f"  xray 二进制验证失败: {ve}")
+
+        # 启动 xray 进程，同时捕获 stdout 和 stderr 以便调试
         xray_proc = subprocess.Popen(
             [xray_bin, "run", "-c", str(config_file)],
             stdout=subprocess.PIPE,
@@ -1255,7 +1118,7 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
             preexec_fn=os.setsid if platform.system() != "Windows" else None,
         )
 
-        # 等待 xray 启动
+        # 等待 xray 启动，逐步检查（最多等 startup_wait * 2 秒）
         max_wait = startup_wait * 2
         waited = 0
         check_interval = 0.5
@@ -1264,6 +1127,7 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
             waited += check_interval
             if xray_proc.poll() is not None:
                 break
+            # 尝试连接第一个节点的端口来确认 xray 已就绪
             if waited >= startup_wait:
                 first_testable = next(
                     ((idx, port) for idx, (_, port) in enumerate(nodes_with_ports) if idx not in failed_indices),
@@ -1275,49 +1139,35 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
                         test_sock.settimeout(1)
                         test_sock.connect(("127.0.0.1", first_testable[1]))
                         test_sock.close()
+                        logger.info(f"  xray 端口就绪（等待 {waited:.1f}s）")
                         break
                     except Exception:
                         pass
 
         if xray_proc.poll() is not None:
-            stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:2000]
-            stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:2000]
+            stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:500]
+            stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:500]
             exit_code = xray_proc.returncode
-            logger.error(f"  [批次 {batch_idx+1}/{total_batches}] xray 启动失败 (exit_code={exit_code})")
-            if stdout_out:
-                for line in stdout_out.splitlines()[:30]:
-                    logger.error(f"  stdout| {line}")
+            logger.error(f"  xray 进程启动失败 (exit_code={exit_code})")
             if stderr_out:
-                for line in stderr_out.splitlines()[:30]:
-                    logger.error(f"  stderr| {line}")
-            # 打印配置中各节点的协议、传输方式和源，便于定位哪个节点导致失败
+                logger.error(f"  stderr: {stderr_out}")
+            if stdout_out:
+                logger.error(f"  stdout: {stdout_out}")
+            # 记录配置文件内容（前500字符）用于调试
             try:
-                cfg_text = config_file.read_text(encoding="utf-8")
-                cfg_obj = json.loads(cfg_text)
-                out_summary = []
-                for ob in cfg_obj.get("outbounds", []):
-                    proto = ob.get("protocol", "?")
-                    net = ob.get("streamSettings", {}).get("network", "-")
-                    tag = ob.get("tag", "")
-                    out_summary.append(f"{proto}/{net}({tag})")
-                # 全部打印，每行不超过5个
-                for i in range(0, len(out_summary), 5):
-                    logger.error(f"  配置节点: {', '.join(out_summary[i:i+5])}")
+                cfg_preview = config_file.read_text()[:500]
+                logger.error(f"  配置预览: {cfg_preview}")
             except Exception:
                 pass
-            # 打印这批节点来自哪些源
-            src_counts = {}
-            for node, _ in nodes_with_ports:
-                s = node.get("source", "unknown")
-                src_counts[s] = src_counts.get(s, 0) + 1
-            logger.error(f"  本批节点源分布: {src_counts}")
             for idx, (node, _) in enumerate(nodes_with_ports):
                 if idx not in failed_indices:
                     results.append({
                         **node, "xray_ok": False, "xray_avg_ms": float("inf"),
-                        "xray_latencies": [], "xray_error": f"xray_crashed(exit={exit_code})",
+                        "xray_latencies": [], "xray_error": f"xray_crashed(exit={exit_code}): {stderr_out[:100]}",
                     })
             return results
+
+        logger.info(f"  xray 进程已启动 (PID={xray_proc.pid})，开始并发测速...")
 
         # 4. 并发测所有节点
         testable = [(idx, node, port) for idx, (node, port) in enumerate(nodes_with_ports)
@@ -1346,7 +1196,7 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
                     exit_ip = result.get("exit_ip", "")
                     ip_info = f" [出口:{exit_ip}]" if exit_ip else ""
                     logger.info(
-                        f"  [批{batch_idx+1}][{done_count}/{len(testable)}] {status} {node['address']}:{node['port']} "
+                        f"  [{done_count}/{len(testable)}] {status} {node['address']}:{node['port']} "
                         f"→ {avg}ms {f'({err})' if err else ''}{verified}{ip_info} {name}"
                     )
                 except Exception as e:
@@ -1354,12 +1204,12 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
                         **node, "xray_ok": False, "xray_avg_ms": float("inf"),
                         "xray_latencies": [], "xray_error": str(e),
                     })
-                    logger.warning(f"  [批{batch_idx+1}][{done_count}/{len(testable)}] 测试异常: {e}")
+                    logger.warning(f"  [{done_count}/{len(testable)}] 测试异常: {e}")
 
     except Exception as e:
-        logger.error(f"  [批次 {batch_idx+1}/{total_batches}] xray 测速异常: {e}")
+        logger.error(f"  xray 测速整体异常: {e}")
     finally:
-        # 清理：杀掉 xray 进程
+        # 清理：杀掉唯一的 xray 进程
         if xray_proc and xray_proc.poll() is None:
             try:
                 if platform.system() != "Windows":
@@ -1372,113 +1222,10 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
                     xray_proc.kill()
                 except Exception:
                     pass
-        # 清理临时目录
-        try:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    logger.info(f"  xray 测速完成，共 {len(results)} 个结果")
     return results
-
-
-def batch_xray_test(xray_bin, candidate_nodes):
-    """
-    按源分批测速：将候选节点按 source 分组，每个源启动独立的 xray 进程。
-    这样如果某个源的节点数据有问题导致 xray 崩溃，可以精确定位到问题源。
-    每个源内部如果节点数超过 BATCH_SIZE，再按数量分批。
-    """
-    BATCH_SIZE = 100  # 每批最多 100 个节点
-    config = TEST_CONFIG
-    total = len(candidate_nodes)
-    max_workers = config.get("xray_max_workers", 20)
-    test_count = config.get("xray_test_count", 3)
-    timeout = config.get("xray_test_timeout", 10)
-    startup_wait = config.get("xray_startup_wait", 2)
-
-    # 按源分组
-    from collections import OrderedDict
-    source_groups = OrderedDict()
-    for node in candidate_nodes:
-        src = node.get("source", "unknown")
-        source_groups.setdefault(src, []).append(node)
-
-    num_sources = len(source_groups)
-    logger.info(f"  xray 真实代理测速（按源分批模式）：{total} 个候选，来自 {num_sources} 个源，并发 {max_workers}")
-    logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
-    for src, nodes in source_groups.items():
-        logger.info(f"    [{src}] {len(nodes)} 个节点")
-
-    # 获取本机公网 IP
-    local_ip = get_local_ip()
-    if local_ip:
-        logger.info(f"  本机公网 IP: {local_ip}（代理出口 IP 必须与此不同）")
-    else:
-        logger.warning("  无法获取本机公网 IP，跳过出口 IP 验证")
-
-    # 先验证 xray 二进制可执行性
-    try:
-        version_result = subprocess.run(
-            [xray_bin, "version"],
-            capture_output=True, timeout=10,
-        )
-        logger.info(f"  xray 版本: {version_result.stdout.decode(errors='ignore').splitlines()[0] if version_result.stdout else '未知'}")
-        if version_result.returncode != 0:
-            err_msg = version_result.stderr.decode(errors="ignore")[:300]
-            logger.error(f"  xray 二进制不可用: {err_msg}")
-            return [{
-                **node, "xray_ok": False, "xray_avg_ms": float("inf"),
-                "xray_latencies": [], "xray_error": f"xray_binary_invalid: {err_msg[:100]}",
-            } for node in candidate_nodes]
-    except Exception as ve:
-        logger.error(f"  xray 二进制验证失败: {ve}")
-
-    # 按源逐个测试
-    all_results = []
-    batch_idx = 0
-    total_batches = sum((len(nodes) + BATCH_SIZE - 1) // BATCH_SIZE for nodes in source_groups.values())
-
-    for src_name, src_nodes in source_groups.items():
-        src_total = len(src_nodes)
-        src_batches = (src_total + BATCH_SIZE - 1) // BATCH_SIZE
-        logger.info(f"\n  ▶ 测试源 [{src_name}]：{src_total} 个节点，{src_batches} 批")
-
-        for sub_idx in range(src_batches):
-            start = sub_idx * BATCH_SIZE
-            end = min(start + BATCH_SIZE, src_total)
-            batch_nodes = src_nodes[start:end]
-            logger.info(f"    [{src_name}] 批次 {sub_idx+1}/{src_batches}，节点 {start+1}-{end}（共 {len(batch_nodes)} 个）")
-
-            batch_results = _xray_test_batch(
-                xray_bin, batch_nodes, batch_idx, total_batches,
-                max_workers, test_count, timeout, startup_wait, local_ip
-            )
-            all_results.extend(batch_results)
-            batch_idx += 1
-
-            # 统计本批结果
-            ok_count = sum(1 for r in batch_results if r.get("xray_ok"))
-            fail_count = len(batch_results) - ok_count
-            crashed = any(r.get("xray_error", "").startswith("xray_crashed") for r in batch_results)
-            if crashed:
-                logger.error(f"    ⚠ [{src_name}] 批次 {sub_idx+1} xray 启动崩溃！该源数据可能有问题")
-            else:
-                logger.info(f"    [{src_name}] 批次 {sub_idx+1} 完成：{ok_count} 可用 / {fail_count} 不可用")
-
-            # 批次间短暂等待，释放端口
-            if batch_idx < total_batches:
-                time.sleep(1)
-
-    # 汇总各源结果
-    logger.info(f"\n  === 各源 xray 测试汇总 ===")
-    for src_name in source_groups:
-        src_results = [r for r in all_results if r.get("source") == src_name]
-        ok = sum(1 for r in src_results if r.get("xray_ok"))
-        crashed = sum(1 for r in src_results if r.get("xray_error", "").startswith("xray_crashed"))
-        total_src = len(src_results)
-        status = "💥 崩溃" if crashed > 0 else ("✓" if ok > 0 else "✗ 全部失败")
-        logger.info(f"    [{src_name}] {status} - {ok}/{total_src} 可用" + (f"（{crashed} 个因崩溃标记失败）" if crashed else ""))
-
-    return all_results
 
 
 # ============================================================
@@ -1559,7 +1306,7 @@ def generate_subscription(nodes):
 
 def main():
     parser = argparse.ArgumentParser(description="V2Ray 订阅聚合 - 采集/去重/真实测速/筛选")
-    parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认100)")
+    parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认30)")
     parser.add_argument("--output", type=str, default=None, help="输出目录 (默认 ./output)")
     parser.add_argument("--ping-count", type=int, default=TEST_CONFIG["tcp_ping_count"], help="每轮ping次数 (默认5)")
     parser.add_argument("--rounds", type=int, default=TEST_CONFIG.get("test_rounds", 3), help="测速轮次 (默认3)")
@@ -1567,7 +1314,6 @@ def main():
     parser.add_argument("--no-xray", action="store_true", help="禁用 xray-core 真实代理测试（只用 TCP/TLS 初筛）")
     parser.add_argument("--timeout", type=int, default=TEST_CONFIG["tcp_ping_timeout"], help="单次超时秒数 (默认5)")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细测速日志")
-    parser.add_argument("--day-offset", type=int, default=0, help="天数偏移（0=今天, -1=昨天），显示在节点名称中")
     args = parser.parse_args()
 
     TEST_CONFIG["max_workers"] = args.workers
@@ -1597,7 +1343,7 @@ def main():
 
     # Step 2: 解析去重
     logger.info("\n[2/4] 解析节点并去重...")
-    nodes, per_source_node_counts = parse_nodes(tagged_contents, day_offset=args.day_offset)
+    nodes, per_source_node_counts = parse_nodes(tagged_contents)
     logger.info(f"  解析得到 {len(nodes)} 个节点")
 
     # 输出每个源解析到的节点数
