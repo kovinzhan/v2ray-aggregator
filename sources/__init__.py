@@ -101,7 +101,7 @@ def get_enabled_sources() -> list[BaseSource]:
     return [s for s in _registry.values() if s.enabled]
 
 
-def collect_all(max_workers=5, per_source_timeout=60) -> tuple[list[tuple[str, str]], list[dict]]:
+def collect_all(max_workers=10, per_source_timeout=60) -> tuple[list[tuple[str, str]], list[dict]]:
     """
     并发采集所有已启用源的内容。
     参数：

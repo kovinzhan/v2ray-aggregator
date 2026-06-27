@@ -43,7 +43,7 @@ except ImportError:
 TEST_CONFIG = {
     "tcp_ping_count": 3,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
     "tcp_ping_timeout": 5,      # 单次超时（秒）
-    "max_workers": 30,          # 并发测试线程数
+    "max_workers": 50,          # 并发测试线程数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     "max_loss_rate": 0.4,       # 最大可接受丢包率
     "test_rounds": 2,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）
@@ -55,7 +55,7 @@ TEST_CONFIG = {
     "xray_test_count": 3,       # 每个节点通过代理请求次数
     "xray_test_timeout": 10,    # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
-    "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
+    "xray_max_workers": 20,     # xray 测试并发数（单进程模式）
 }
 
 # HTTP 请求头
@@ -1463,7 +1463,7 @@ def generate_subscription(nodes):
 
 def main():
     parser = argparse.ArgumentParser(description="V2Ray 订阅聚合 - 采集/去重/真实测速/筛选")
-    parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认30)")
+    parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认50)")
     parser.add_argument("--output", type=str, default=None, help="输出目录 (默认 ./output)")
     parser.add_argument("--ping-count", type=int, default=TEST_CONFIG["tcp_ping_count"], help="每轮ping次数 (默认5)")
     parser.add_argument("--rounds", type=int, default=TEST_CONFIG.get("test_rounds", 3), help="测速轮次 (默认3)")

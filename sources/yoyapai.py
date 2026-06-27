@@ -34,28 +34,34 @@ class YoyapaiSource(BaseSource):
         # WordPress sitemap 中最新的排在最后，取最后一篇
         # 实际测试发现可能顺序不固定，取 ID 最大的
         article_urls.sort(key=lambda u: int(u.split('/')[-1]), reverse=True)
-        target_url = article_urls[0]
 
-        # 访问文章详情页（HTML 实体解码，因为链接中的 :// 可能被编码为 &#47;&#47;）
-        page = unescape(self.http_get_text(target_url, timeout=15))
+        # 尝试最新的几篇文章（有时最新一篇还没更新完）
+        sub_links = []
+        target_url = None
+        for url in article_urls[:3]:
+            # 访问文章详情页（HTML 实体解码）
+            page = unescape(self.http_get_text(url, timeout=15))
 
-        # 提取 freenode.yoyapai.com 的订阅链接（.txt 和 .yaml）
-        sub_links = re.findall(
-            r'(https?://freenode\.yoyapai\.com/[^\s<>"\']+?\.(?:txt|yaml))',
-            page
-        )
-
-        # 如果没有匹配到，尝试更宽泛的格式
-        if not sub_links:
+            # 提取 freenode.yoyapai.com 的订阅链接（.txt 和 .yaml）
             sub_links = re.findall(
-                r'(https?://freenode\.yoyapai\.com/[^\s<>"\']+)',
+                r'(https?://freenode\.yoyapai\.com/[^\s<>"\']+?\.(?:txt|yaml))',
                 page
             )
 
-        sub_links = list(dict.fromkeys(sub_links))
+            # 如果没有匹配到，尝试更宽泛的格式
+            if not sub_links:
+                sub_links = re.findall(
+                    r'(https?://freenode\.yoyapai\.com/[^\s<>"\']+)',
+                    page
+                )
+
+            sub_links = list(dict.fromkeys(sub_links))
+            if sub_links:
+                target_url = url
+                break
 
         if not sub_links:
-            raise Exception(f"文章页 {target_url} 中未找到订阅链接")
+            raise Exception(f"最新 {min(3, len(article_urls))} 篇文章中均未找到订阅链接")
 
         results = []
         for url in sub_links:
