@@ -14,6 +14,7 @@ from . import BaseSource, register
 @register
 class PasswallSource(BaseSource):
     name = "passwall"
+    enabled = False  # 暂时禁用，实际不可用
 
     SITEMAP_URL = "https://passwall.wiki/sitemap.xml"
     ARTICLE_PREFIX = "https://passwall.wiki/free-node/"

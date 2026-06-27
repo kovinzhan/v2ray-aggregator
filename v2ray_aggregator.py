@@ -43,7 +43,7 @@ except ImportError:
 TEST_CONFIG = {
     "tcp_ping_count": 2,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
     "tcp_ping_timeout": 3,      # 单次超时（秒）
-    "max_workers": 300,         # 并发测试线程数
+    "max_workers": 500,         # 并发测试线程数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     "max_loss_rate": 0.4,       # 最大可接受丢包率
     "test_rounds": 1,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）

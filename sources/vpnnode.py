@@ -1,26 +1,27 @@
 """
-V2RayNode - 每日更新
-https://v2raynode.top/
+VPN免费节点 (vpnnode.net) - 每日更新
+https://vpnnode.net/free-node/
 
-通过 sitemap 获取最新文章 URL，文章详情页中包含
-node.v2raynode.top 的 .txt/.yaml/.json 订阅链接。
+每天发布一篇文章，内含订阅链接，格式为：
+https://node.vpnnode.net/uploads/{YYYY}/{MM}/{N}-{YYYYMMDD}.txt
+
+通过文章列表页提取最新文章链接，进入详情页获取 .txt 订阅链接。
 """
 
 import re
-from datetime import datetime, date
+from datetime import date
 from . import BaseSource, register
 
 
 @register
-class V2RayNodeSource(BaseSource):
-    name = "v2raynode"
-    enabled = False  # 暂时禁用，实际不可用
+class VpnNodeSource(BaseSource):
+    name = "vpnnode"
 
-    SITEMAP_URL = "https://v2raynode.top/sitemap.xml"
+    LIST_URL = "https://vpnnode.net/free-node/"
 
     def _extract_date_from_url(self, url):
-        """从文章 URL 中提取日期，如 /free-node/2026-6-27-xxx.htm → '2026-06-27'"""
-        match = re.search(r'/free-node/(\d{4})-(\d{1,2})-(\d{1,2})-', url)
+        """从文章 URL 中提取日期，如 /2026-06-27-xxx.htm → '2026-06-27'"""
+        match = re.search(r'/(\d{4})-(\d{1,2})-(\d{1,2})-', url)
         if match:
             y, m, d = int(match.group(1)), int(match.group(2)), int(match.group(3))
             return date(y, m, d).strftime("%Y-%m-%d")
@@ -36,27 +37,21 @@ class V2RayNodeSource(BaseSource):
 
     def _fetch_internal(self) -> tuple[str, list[str]]:
         """内部实现，返回 (data_date, [content, ...])"""
-        # 从 sitemap 获取最新的免费节点文章链接
-        sitemap = self.http_get_text(self.SITEMAP_URL)
+        # 获取文章列表页
+        html = self.http_get_text(self.LIST_URL, timeout=15)
 
-        # 提取 /free-node/ 下的文章链接
-        article_urls = re.findall(
-            r'<loc>(https://v2raynode\.top/free-node/\d{4}-\d{1,2}-\d{1,2}-[^<]+\.htm)</loc>',
-            sitemap
+        # 提取文章链接（相对路径格式如 /free-node/2026-6-27-xxx.htm）
+        article_paths = re.findall(
+            r'href="(/free-node/\d{4}-\d{1,2}-\d{1,2}-[^"]+\.htm)"',
+            html
         )
 
-        if not article_urls:
-            raise Exception("sitemap 中未找到免费节点文章")
+        if not article_paths:
+            raise Exception("列表页未找到文章链接")
 
-        # 取最新一篇
-        today = datetime.now().strftime("%Y-%-m-%-d")
-        target_url = None
-        for url in article_urls:
-            if today in url:
-                target_url = url
-                break
-        if not target_url:
-            target_url = article_urls[0]
+        # 去重，取第一个（最新）
+        article_paths = list(dict.fromkeys(article_paths))
+        target_url = "https://vpnnode.net" + article_paths[0]
 
         # 从 URL 中提取数据日期
         data_date = self._extract_date_from_url(target_url)
@@ -64,9 +59,9 @@ class V2RayNodeSource(BaseSource):
         # 访问文章详情页
         page = self.http_get_text(target_url, timeout=15)
 
-        # 提取 node.v2raynode.top 的订阅链接（.txt 为 V2Ray 格式）
+        # 提取 node.vpnnode.net 的 .txt 订阅链接
         sub_links = re.findall(
-            r'(https?://node\.v2raynode\.top/[^\s<"\']+?\.txt)',
+            r'(https?://node\.vpnnode\.net/uploads/[^\s<"\']+?\.txt)',
             page
         )
 

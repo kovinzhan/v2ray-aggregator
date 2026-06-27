@@ -12,6 +12,7 @@ from . import BaseSource, register
 @register
 class ClashNodeFreeSource(BaseSource):
     name = "clashnodefree"
+    enabled = False  # 暂时禁用，实际不可用
 
     PAGE_URL = "https://clashnodefree.com/free-node/"
 
