@@ -557,11 +557,12 @@ def build_xray_outbound(node, tag="proxy"):
             logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
             return None
 
-        stream = {"network": net}
+        # xray 25.x: ws -> websocket
+        stream = {"network": "websocket" if net == "ws" else net}
         if net == "ws":
             stream["wsSettings"] = {
                 "path": decoded.get("path", "/"),
-                "headers": {"Host": decoded.get("host", address)},
+                "host": decoded.get("host", address),
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": decoded.get("path", "")}
@@ -625,11 +626,12 @@ def build_xray_outbound(node, tag="proxy"):
             logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
             return None
 
-        stream = {"network": net}
+        # xray 25.x: ws -> websocket
+        stream = {"network": "websocket" if net == "ws" else net}
         if net == "ws":
             stream["wsSettings"] = {
                 "path": params.get("path", "/"),
-                "headers": {"Host": params.get("host", address)},
+                "host": params.get("host", address),
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
@@ -712,11 +714,12 @@ def build_xray_outbound(node, tag="proxy"):
             logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
             return None
 
-        stream = {"network": net}
+        # xray 25.x: ws -> websocket
+        stream = {"network": "websocket" if net == "ws" else net}
         if net == "ws":
             stream["wsSettings"] = {
                 "path": params.get("path", "/"),
-                "headers": {"Host": params.get("host", address)},
+                "host": params.get("host", address),
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
@@ -1145,20 +1148,55 @@ def batch_xray_test(xray_bin, candidate_nodes):
                         pass
 
         if xray_proc.poll() is not None:
-            stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:500]
-            stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:500]
+            stderr_out = xray_proc.stderr.read().decode(errors="ignore")
+            stdout_out = xray_proc.stdout.read().decode(errors="ignore")
             exit_code = xray_proc.returncode
             logger.error(f"  xray 进程启动失败 (exit_code={exit_code})")
             if stderr_out:
-                logger.error(f"  stderr: {stderr_out}")
+                logger.error(f"  stderr: {stderr_out[:500]}")
             if stdout_out:
-                logger.error(f"  stdout: {stdout_out}")
-            # 记录配置文件内容（前500字符）用于调试
+                logger.error(f"  stdout: {stdout_out[:500]}")
+
+            # === 将完整崩溃现场保存到 debug/ 目录 ===
             try:
-                cfg_preview = config_file.read_text()[:500]
-                logger.error(f"  配置预览: {cfg_preview}")
-            except Exception:
-                pass
+                debug_dir = Path(__file__).parent / "debug"
+                debug_dir.mkdir(exist_ok=True)
+                timestamp = time.strftime("%Y%m%d_%H%M%S")
+                # 保存完整配置
+                cfg_content = config_file.read_text(encoding="utf-8")
+                (debug_dir / f"xray_crash_{timestamp}_config.json").write_text(
+                    cfg_content, encoding="utf-8")
+                # 保存完整日志
+                crash_log = (
+                    f"exit_code: {exit_code}\n"
+                    f"timestamp: {timestamp}\n"
+                    f"total_nodes: {total}\n"
+                    f"inbounds_count: {len(xray_config.get('inbounds', []))}\n"
+                    f"outbounds_count: {len(xray_config.get('outbounds', []))}\n"
+                    f"\n=== STDOUT ===\n{stdout_out}\n"
+                    f"\n=== STDERR ===\n{stderr_out}\n"
+                    f"\n=== 节点源分布 ===\n"
+                )
+                src_counts = {}
+                for node, _ in nodes_with_ports:
+                    s = node.get("source", "unknown")
+                    src_counts[s] = src_counts.get(s, 0) + 1
+                for s, c in src_counts.items():
+                    crash_log += f"  {s}: {c} 个节点\n"
+                # 保存各节点摘要
+                crash_log += f"\n=== 节点列表 ===\n"
+                for idx, (node, port) in enumerate(nodes_with_ports):
+                    crash_log += (
+                        f"  [{idx}] {node.get('protocol','?')}/{node.get('net','?')} "
+                        f"{node.get('address','')}:{node.get('port','')} "
+                        f"source={node.get('source','?')}\n"
+                    )
+                (debug_dir / f"xray_crash_{timestamp}_log.txt").write_text(
+                    crash_log, encoding="utf-8")
+                logger.info(f"  崩溃现场已保存到 debug/xray_crash_{timestamp}_*.* ")
+            except Exception as dump_err:
+                logger.warning(f"  保存崩溃现场失败: {dump_err}")
+
             for idx, (node, _) in enumerate(nodes_with_ports):
                 if idx not in failed_indices:
                     results.append({
