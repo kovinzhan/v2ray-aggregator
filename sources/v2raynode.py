@@ -2,10 +2,12 @@
 V2RayNode - 每日更新
 https://v2raynode.top/
 
-提供 V2Ray/Clash 订阅资源。
+通过 sitemap 获取最新文章 URL，文章详情页中包含
+node.v2raynode.top 的 .txt/.yaml/.json 订阅链接。
 """
 
 import re
+from datetime import datetime
 from . import BaseSource, register
 
 
@@ -13,46 +15,56 @@ from . import BaseSource, register
 class V2RayNodeSource(BaseSource):
     name = "v2raynode"
 
-    PAGE_URL = "https://v2raynode.top/"
+    SITEMAP_URL = "https://v2raynode.top/sitemap.xml"
 
     def fetch(self) -> list[str]:
-        html = self.http_get_text(self.PAGE_URL)
+        # 从 sitemap 获取最新的免费节点文章链接
+        sitemap = self.http_get_text(self.SITEMAP_URL)
 
-        # 查找最新文章链接
-        article_links = re.findall(
-            r'href="(https?://v2raynode\.top/\d+[^\s<"\']*)"',
-            html
+        # 提取 /free-node/ 下的文章链接
+        article_urls = re.findall(
+            r'<loc>(https://v2raynode\.top/free-node/\d{4}-\d{1,2}-\d{1,2}-[^<]+\.htm)</loc>',
+            sitemap
         )
 
-        if not article_links:
-            # 直接在首页找订阅链接
-            article_links = [self.PAGE_URL]
+        if not article_urls:
+            raise Exception("sitemap 中未找到免费节点文章")
 
-        # 去重，只取最新几篇
-        article_links = list(dict.fromkeys(article_links))[:3]
+        # 取最新一篇
+        today = datetime.now().strftime("%Y-%-m-%-d")
+        target_url = None
+        for url in article_urls:
+            if today in url:
+                target_url = url
+                break
+        if not target_url:
+            target_url = article_urls[0]
+
+        # 访问文章详情页
+        page = self.http_get_text(target_url, timeout=15)
+
+        # 提取 node.v2raynode.top 的订阅链接（.txt 为 V2Ray 格式）
+        sub_links = re.findall(
+            r'(https?://node\.v2raynode\.top/[^\s<"\']+?\.txt)',
+            page
+        )
+
+        sub_links = list(dict.fromkeys(sub_links))
+
+        if not sub_links:
+            raise Exception(f"文章页 {target_url} 中未找到 V2Ray 订阅链接")
 
         results = []
-        for article_url in article_links:
+        for url in sub_links:
             try:
-                page = self.http_get_text(article_url, timeout=15)
-                # 查找订阅链接
-                sub_links = re.findall(
-                    r'(https?://[^\s<"\']+?(?:\.txt|\.yaml|/sub[^\s<"\']*))',
-                    page
-                )
-                for url in sub_links:
-                    try:
-                        content = self.http_get_text(url, timeout=15)
-                        if any(proto in content for proto in
-                               ["vmess://", "vless://", "trojan://", "ss://"]) \
-                                or len(content) > 100:
-                            results.append(content)
-                    except Exception:
-                        continue
+                content = self.http_get_text(url, timeout=15)
+                if any(proto in content for proto in ["vmess://", "vless://", "trojan://", "ss://"]) \
+                        or len(content) > 100:
+                    results.append(content)
             except Exception:
                 continue
 
         if not results:
-            raise Exception("未能获取到有效订阅内容")
+            raise Exception(f"所有 {len(sub_links)} 个订阅链接均获取失败或内容无效")
 
         return results

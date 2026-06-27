@@ -1,6 +1,10 @@
 """
 悠雅派 (yoyapai) - 每日更新，90+ 节点
 https://yoyapai.com/category/mianfeijiedian
+
+文章链接格式为纯数字 ID（如 https://yoyapai.com/564），
+通过 WordPress sitemap 获取最新文章。
+详情页中包含 freenode.yoyapai.com 的订阅链接。
 """
 
 import re
@@ -11,36 +15,46 @@ from . import BaseSource, register
 class YoyapaiSource(BaseSource):
     name = "yoyapai"
 
-    CATEGORY_URL = "https://yoyapai.com/category/mianfeijiedian"
+    SITEMAP_URL = "https://yoyapai.com/wp-sitemap-posts-post-1.xml"
 
     def fetch(self) -> list[str]:
-        html = self.http_get_text(self.CATEGORY_URL)
+        # 从 WordPress sitemap 获取文章列表
+        sitemap = self.http_get_text(self.SITEMAP_URL)
 
-        # 提取最新文章链接
-        article_links = re.findall(
-            r'href="(https?://yoyapai\.com/\d+[^\s<"\']*)"',
-            html
+        # 提取文章链接（纯数字ID格式）
+        article_urls = re.findall(
+            r'<loc>(https://yoyapai\.com/\d+)</loc>',
+            sitemap
         )
-        if not article_links:
-            raise Exception("未找到文章链接")
 
-        # 去重，取最新一篇
-        article_links = list(dict.fromkeys(article_links))
-        post_url = article_links[0]
+        if not article_urls:
+            raise Exception("sitemap 中未找到文章链接")
 
-        page = self.http_get_text(post_url)
+        # WordPress sitemap 中最新的排在最后，取最后一篇
+        # 实际测试发现可能顺序不固定，取 ID 最大的
+        article_urls.sort(key=lambda u: int(u.split('/')[-1]), reverse=True)
+        target_url = article_urls[0]
 
-        # 查找订阅链接
+        # 访问文章详情页
+        page = self.http_get_text(target_url, timeout=15)
+
+        # 提取 freenode.yoyapai.com 的订阅链接
         sub_links = re.findall(
-            r'(https?://[^\s<"\']+?(?:\.txt|\.yaml|/sub\?[^\s<"\']*|subscribe[^\s<"\']*))',
+            r'(https?://freenode\.yoyapai\.com/[^\s<"\']+?\.txt)',
             page
         )
 
-        # 去重
+        # 如果没有 .txt 链接，也尝试匹配其他格式
+        if not sub_links:
+            sub_links = re.findall(
+                r'(https?://freenode\.yoyapai\.com/[^\s<"\']+)',
+                page
+            )
+
         sub_links = list(dict.fromkeys(sub_links))
 
         if not sub_links:
-            raise Exception("文章中未找到订阅链接")
+            raise Exception(f"文章页 {target_url} 中未找到订阅链接")
 
         results = []
         for url in sub_links:
@@ -53,6 +67,6 @@ class YoyapaiSource(BaseSource):
                 continue
 
         if not results:
-            raise Exception(f"所有 {len(sub_links)} 个链接均获取失败或内容无效")
+            raise Exception(f"所有 {len(sub_links)} 个订阅链接均获取失败或内容无效")
 
         return results
