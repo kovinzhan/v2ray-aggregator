@@ -798,6 +798,22 @@ def build_xray_outbound(node, tag="proxy"):
             else:
                 return None
 
+        # 校验加密方法是否合法（防止 base64 解码乱码导致 xray 崩溃）
+        VALID_SS_METHODS = {
+            "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305",
+            "chacha20-ietf-poly1305", "xchacha20-poly1305",
+            "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm",
+            "2022-blake3-chacha20-poly1305",
+            # 旧方法（部分 xray 版本仍支持）
+            "aes-128-cfb", "aes-192-cfb", "aes-256-cfb",
+            "aes-128-ctr", "aes-192-ctr", "aes-256-ctr",
+            "rc4-md5", "chacha20", "chacha20-ietf",
+            "none", "plain",
+        }
+        if method not in VALID_SS_METHODS:
+            logger.debug(f"  跳过 SS 节点（不支持的加密方法 '{method}'）: {address}:{port}")
+            return None
+
         outbound = {
             "tag": tag,
             "protocol": "shadowsocks",
