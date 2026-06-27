@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-27T07:51:05.826224",
+  "generated_at": "2026-06-27T08:03:26.794626",
   "test_config": {
     "rounds": 2,
     "pings_per_round": 3,
@@ -11,6 +11,13 @@
   "total_sources": 7,
   "source_details": [
     {
+      "name": "clashmeta",
+      "success": true,
+      "content_count": 8,
+      "node_count": 1014,
+      "error": ""
+    },
+    {
       "name": "clashnodefree",
       "success": true,
       "content_count": 2,
@@ -18,10 +25,10 @@
       "error": ""
     },
     {
-      "name": "mibei77",
+      "name": "passwall",
       "success": true,
-      "content_count": 1,
-      "node_count": 268,
+      "content_count": 8,
+      "node_count": 1014,
       "error": ""
     },
     {
@@ -32,13 +39,6 @@
       "error": "文章页 https://yoyapai.com/564 中未找到订阅链接"
     },
     {
-      "name": "passwall",
-      "success": true,
-      "content_count": 8,
-      "node_count": 1014,
-      "error": ""
-    },
-    {
       "name": "v2raynode",
       "success": true,
       "content_count": 3,
@@ -46,10 +46,10 @@
       "error": ""
     },
     {
-      "name": "clashmeta",
+      "name": "mibei77",
       "success": true,
-      "content_count": 8,
-      "node_count": 1014,
+      "content_count": 1,
+      "node_count": 268,
       "error": ""
     },
     {
