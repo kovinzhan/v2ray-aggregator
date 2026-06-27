@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-27T08:35:27.775029",
+  "generated_at": "2026-06-27T08:42:24.850710",
   "test_config": {
     "rounds": 2,
     "pings_per_round": 3,
@@ -8,8 +8,22 @@
     "xray_enabled": true,
     "xray_test_count": 3
   },
-  "total_sources": 3,
+  "total_sources": 4,
   "source_details": [
+    {
+      "name": "v2raynode",
+      "success": true,
+      "content_count": 3,
+      "node_count": 979,
+      "error": ""
+    },
+    {
+      "name": "yoyapai",
+      "success": true,
+      "content_count": 2,
+      "node_count": 325,
+      "error": ""
+    },
     {
       "name": "clashnodefree",
       "success": true,
@@ -18,23 +32,16 @@
       "error": ""
     },
     {
-      "name": "passwall",
+      "name": "mibei77",
       "success": true,
-      "content_count": 7,
-      "node_count": 1014,
-      "error": ""
-    },
-    {
-      "name": "clashmeta",
-      "success": true,
-      "content_count": 8,
-      "node_count": 1014,
+      "content_count": 1,
+      "node_count": 268,
       "error": ""
     }
   ],
-  "total_nodes_parsed": 2092,
-  "unique_nodes": 622,
-  "tested_nodes": 622,
+  "total_nodes_parsed": 1636,
+  "unique_nodes": 802,
+  "tested_nodes": 802,
   "selected_nodes": 0,
   "best_nodes": []
 }
