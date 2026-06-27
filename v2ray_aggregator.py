@@ -672,11 +672,16 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
         elif security == "reality":
+            # REALITY 必须有 publicKey，否则 xray 会报 empty "password" 并崩溃
+            pbk = params.get("pbk", "")
+            if not pbk:
+                logger.debug(f"  跳过 REALITY 节点（缺少 publicKey）: {address}:{port}")
+                return None
             stream["security"] = "reality"
             reality_settings = {
                 "serverName": params.get("sni", ""),
                 "fingerprint": params.get("fp", "chrome"),
-                "publicKey": params.get("pbk", ""),
+                "publicKey": pbk,
                 "shortId": params.get("sid", ""),
             }
             # Reality 的 spiderX 参数
