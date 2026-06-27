@@ -10,6 +10,7 @@ from . import BaseSource, register
 @register
 class Mibei77Source(BaseSource):
     name = "mibei77"
+    enabled = False  # 暂时禁用，快速验证 xray 配置
 
     def fetch(self) -> list[str]:
         category_url = "https://www.mibei77.com/category/jiedian"
