@@ -14,7 +14,7 @@ from . import BaseSource, register
 @register
 class PasswallSource(BaseSource):
     name = "passwall"
-    enabled = False  # 暂时禁用，快速验证 xray 配置
+
 
     SITEMAP_URL = "https://passwall.wiki/sitemap.xml"
     ARTICLE_PREFIX = "https://passwall.wiki/free-node/"
