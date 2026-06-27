@@ -41,21 +41,21 @@ except ImportError:
 
 # 测速配置
 TEST_CONFIG = {
-    "tcp_ping_count": 3,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
+    "tcp_ping_count": 2,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
     "tcp_ping_timeout": 5,      # 单次超时（秒）
-    "max_workers": 30,          # 并发测试线程数
+    "max_workers": 80,          # 并发测试线程数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     "max_loss_rate": 0.4,       # 最大可接受丢包率
-    "test_rounds": 2,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）
+    "test_rounds": 1,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）
     "round_interval": 1,        # 轮次间隔（秒）
     "tls_test_enabled": True,   # 是否进行 TLS 握手测试
     "dns_resolve_first": True,  # 先 DNS 解析
     # xray-core 真实代理测速配置
     "xray_enabled": True,       # 是否启用 xray-core 真实代理测试
-    "xray_test_count": 3,       # 每个节点通过代理请求次数
-    "xray_test_timeout": 10,    # 代理请求超时（秒）
+    "xray_test_count": 2,       # 每个节点通过代理请求次数
+    "xray_test_timeout": 8,     # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
-    "xray_max_workers": 10,     # xray 测试并发数（单进程模式，可适当提高）
+    "xray_max_workers": 50,     # xray 测试并发数（单进程模式，所有节点共用一个进程）
 }
 
 # HTTP 请求头
