@@ -43,7 +43,7 @@ except ImportError:
 TEST_CONFIG = {
     "tcp_ping_count": 3,        # 每个节点 TCP ping 次数（初筛阶段，减少次数加快速度）
     "tcp_ping_timeout": 5,      # 单次超时（秒）
-    "max_workers": 50,          # 并发测试线程数
+    "max_workers": 100,         # 并发测试线程数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     "max_loss_rate": 0.4,       # 最大可接受丢包率
     "test_rounds": 2,           # TCP/TLS 初筛轮次（减少，主要靠 xray 二次验证）
@@ -55,7 +55,7 @@ TEST_CONFIG = {
     "xray_test_count": 3,       # 每个节点通过代理请求次数
     "xray_test_timeout": 10,    # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
-    "xray_max_workers": 20,     # xray 测试并发数（单进程模式）
+    "xray_max_workers": 50,     # xray 测试并发数
 }
 
 # HTTP 请求头
@@ -696,6 +696,12 @@ def build_xray_outbound(node, tag="proxy"):
     port = node["port"]
     raw_uri = node["raw"]
 
+    # 基本参数校验：过滤掉无效节点
+    if not address or not port or port <= 0 or port > 65535:
+        return None
+    if not raw_uri:
+        return None
+
     # xray 支持的传输协议白名单
     SUPPORTED_NETWORKS = {"tcp", "ws", "grpc", "h2", "http", "kcp", "quic",
                           "httpupgrade", "splithttp", "xhttp"}
@@ -716,9 +722,10 @@ def build_xray_outbound(node, tag="proxy"):
 
         stream = {"network": net}
         if net == "ws":
+            # xray 25.x 中 wsSettings.headers.Host 已废弃，改用独立 host 字段
             stream["wsSettings"] = {
                 "path": decoded.get("path", "/"),
-                "headers": {"Host": decoded.get("host", address)},
+                "host": decoded.get("host", address),
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": decoded.get("path", "")}
@@ -748,9 +755,9 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["fingerprint"] = fp
             else:
                 tls_settings["fingerprint"] = "chrome"  # 默认伪装 chrome
-            # ALPN 协商 — 某些节点要求特定协议
+            # ALPN 协商 — ws 传输时不设 http/1.1 ALPN（xray 25.x 已废弃该组合）
             alpn = decoded.get("alpn", "")
-            if alpn:
+            if alpn and net != "ws":
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
 
@@ -786,7 +793,7 @@ def build_xray_outbound(node, tag="proxy"):
         if net == "ws":
             stream["wsSettings"] = {
                 "path": params.get("path", "/"),
-                "headers": {"Host": params.get("host", address)},
+                "host": params.get("host", address),
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
@@ -821,9 +828,9 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["fingerprint"] = fp
             else:
                 tls_settings["fingerprint"] = "chrome"
-            # ALPN 协商
+            # ALPN 协商 — ws 传输时不设 http/1.1 ALPN（xray 25.x 已废弃该组合）
             alpn = params.get("alpn", "")
-            if alpn:
+            if alpn and net != "ws":
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
         elif security == "reality":
@@ -873,7 +880,7 @@ def build_xray_outbound(node, tag="proxy"):
         if net == "ws":
             stream["wsSettings"] = {
                 "path": params.get("path", "/"),
-                "headers": {"Host": params.get("host", address)},
+                "host": params.get("host", address),
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
@@ -903,9 +910,9 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["fingerprint"] = fp
             else:
                 tls_settings["fingerprint"] = "chrome"
-            # ALPN 协商
+            # ALPN 协商 — ws 传输时不设 http/1.1 ALPN（xray 25.x 已废弃该组合）
             alpn = params.get("alpn", "")
-            if alpn:
+            if alpn and net != "ws":
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
 
@@ -1262,14 +1269,26 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
                         pass
 
         if xray_proc.poll() is not None:
-            stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:500]
-            stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:500]
+            stderr_out = xray_proc.stderr.read().decode(errors="ignore")[:2000]
+            stdout_out = xray_proc.stdout.read().decode(errors="ignore")[:2000]
             exit_code = xray_proc.returncode
             logger.error(f"  [批次 {batch_idx+1}/{total_batches}] xray 启动失败 (exit_code={exit_code})")
             if stdout_out:
-                logger.error(f"  stdout: {stdout_out[:200]}")
+                logger.error(f"  stdout: {stdout_out}")
             if stderr_out:
-                logger.error(f"  stderr: {stderr_out[:200]}")
+                logger.error(f"  stderr: {stderr_out}")
+            # 打印配置中各节点的协议和传输方式，便于定位哪个节点导致失败
+            try:
+                cfg_text = config_file.read_text(encoding="utf-8")
+                cfg_obj = json.loads(cfg_text)
+                out_summary = []
+                for ob in cfg_obj.get("outbounds", [])[:20]:
+                    proto = ob.get("protocol", "?")
+                    net = ob.get("streamSettings", {}).get("network", "-")
+                    out_summary.append(f"{proto}/{net}")
+                logger.error(f"  配置摘要(前20): {', '.join(out_summary)}")
+            except Exception:
+                pass
             for idx, (node, _) in enumerate(nodes_with_ports):
                 if idx not in failed_indices:
                     results.append({
@@ -1346,7 +1365,7 @@ def batch_xray_test(xray_bin, candidate_nodes):
     避免单进程 inbounds 过多（500+）导致 xray 启动失败。
     每批最多 BATCH_SIZE 个节点。
     """
-    BATCH_SIZE = 50  # 每批最多 50 个节点
+    BATCH_SIZE = 20  # 每批最多 20 个节点（GitHub Actions 环境 fd 有限）
     config = TEST_CONFIG
     total = len(candidate_nodes)
     max_workers = config.get("xray_max_workers", 20)
@@ -1482,7 +1501,7 @@ def generate_subscription(nodes):
 
 def main():
     parser = argparse.ArgumentParser(description="V2Ray 订阅聚合 - 采集/去重/真实测速/筛选")
-    parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认50)")
+    parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数 (默认100)")
     parser.add_argument("--output", type=str, default=None, help="输出目录 (默认 ./output)")
     parser.add_argument("--ping-count", type=int, default=TEST_CONFIG["tcp_ping_count"], help="每轮ping次数 (默认5)")
     parser.add_argument("--rounds", type=int, default=TEST_CONFIG.get("test_rounds", 3), help="测速轮次 (默认3)")
