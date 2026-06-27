@@ -701,6 +701,11 @@ def build_xray_outbound(node, tag="proxy"):
         return None
     if not raw_uri:
         return None
+    # 确保 port 为整数
+    try:
+        port = int(port)
+    except (ValueError, TypeError):
+        return None
 
     # xray 支持的传输协议白名单
     SUPPORTED_NETWORKS = {"tcp", "ws", "grpc", "h2", "http", "kcp", "quic",
@@ -722,10 +727,9 @@ def build_xray_outbound(node, tag="proxy"):
 
         stream = {"network": net}
         if net == "ws":
-            # xray 25.x 中 wsSettings.headers.Host 已废弃，改用独立 host 字段
             stream["wsSettings"] = {
                 "path": decoded.get("path", "/"),
-                "host": decoded.get("host", address),
+                "headers": {"Host": decoded.get("host", address)},
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": decoded.get("path", "")}
@@ -755,12 +759,15 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["fingerprint"] = fp
             else:
                 tls_settings["fingerprint"] = "chrome"  # 默认伪装 chrome
-            # ALPN 协商 — ws 传输时不设 http/1.1 ALPN（xray 25.x 已废弃该组合）
+            # ALPN 协商 — 某些节点要求特定协议
             alpn = decoded.get("alpn", "")
-            if alpn and net != "ws":
+            if alpn:
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
 
+        vmess_id = decoded.get("id", "")
+        if not vmess_id:
+            return None
         outbound = {
             "tag": tag,
             "protocol": "vmess",
@@ -768,7 +775,7 @@ def build_xray_outbound(node, tag="proxy"):
                 "address": address,
                 "port": port,
                 "users": [{
-                    "id": decoded.get("id", ""),
+                    "id": vmess_id,
                     "alterId": int(decoded.get("aid", 0)),
                     "security": decoded.get("scy", "auto"),
                 }],
@@ -780,6 +787,8 @@ def build_xray_outbound(node, tag="proxy"):
         parsed = urllib.parse.urlparse(raw_uri)
         params = dict(urllib.parse.parse_qsl(parsed.query))
         uuid = parsed.username or ""
+        if not uuid:
+            return None
 
         net = params.get("type", "tcp")
         security = params.get("security", "none")
@@ -793,7 +802,7 @@ def build_xray_outbound(node, tag="proxy"):
         if net == "ws":
             stream["wsSettings"] = {
                 "path": params.get("path", "/"),
-                "host": params.get("host", address),
+                "headers": {"Host": params.get("host", address)},
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
@@ -828,9 +837,9 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["fingerprint"] = fp
             else:
                 tls_settings["fingerprint"] = "chrome"
-            # ALPN 协商 — ws 传输时不设 http/1.1 ALPN（xray 25.x 已废弃该组合）
+            # ALPN 协商
             alpn = params.get("alpn", "")
-            if alpn and net != "ws":
+            if alpn:
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
         elif security == "reality":
@@ -867,6 +876,8 @@ def build_xray_outbound(node, tag="proxy"):
         parsed = urllib.parse.urlparse(raw_uri)
         params = dict(urllib.parse.parse_qsl(parsed.query))
         password = parsed.username or ""
+        if not password:
+            return None
 
         net = params.get("type", "tcp")
         security = params.get("security", "tls")
@@ -880,7 +891,7 @@ def build_xray_outbound(node, tag="proxy"):
         if net == "ws":
             stream["wsSettings"] = {
                 "path": params.get("path", "/"),
-                "host": params.get("host", address),
+                "headers": {"Host": params.get("host", address)},
             }
         elif net == "grpc":
             stream["grpcSettings"] = {"serviceName": params.get("serviceName", "")}
@@ -910,9 +921,9 @@ def build_xray_outbound(node, tag="proxy"):
                 tls_settings["fingerprint"] = fp
             else:
                 tls_settings["fingerprint"] = "chrome"
-            # ALPN 协商 — ws 传输时不设 http/1.1 ALPN（xray 25.x 已废弃该组合）
+            # ALPN 协商
             alpn = params.get("alpn", "")
-            if alpn and net != "ws":
+            if alpn:
                 tls_settings["alpn"] = alpn.split(",")
             stream["tlsSettings"] = tls_settings
 
@@ -1274,21 +1285,32 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
             exit_code = xray_proc.returncode
             logger.error(f"  [批次 {batch_idx+1}/{total_batches}] xray 启动失败 (exit_code={exit_code})")
             if stdout_out:
-                logger.error(f"  stdout: {stdout_out}")
+                for line in stdout_out.splitlines()[:30]:
+                    logger.error(f"  stdout| {line}")
             if stderr_out:
-                logger.error(f"  stderr: {stderr_out}")
-            # 打印配置中各节点的协议和传输方式，便于定位哪个节点导致失败
+                for line in stderr_out.splitlines()[:30]:
+                    logger.error(f"  stderr| {line}")
+            # 打印配置中各节点的协议、传输方式和源，便于定位哪个节点导致失败
             try:
                 cfg_text = config_file.read_text(encoding="utf-8")
                 cfg_obj = json.loads(cfg_text)
                 out_summary = []
-                for ob in cfg_obj.get("outbounds", [])[:20]:
+                for ob in cfg_obj.get("outbounds", []):
                     proto = ob.get("protocol", "?")
                     net = ob.get("streamSettings", {}).get("network", "-")
-                    out_summary.append(f"{proto}/{net}")
-                logger.error(f"  配置摘要(前20): {', '.join(out_summary)}")
+                    tag = ob.get("tag", "")
+                    out_summary.append(f"{proto}/{net}({tag})")
+                # 全部打印，每行不超过5个
+                for i in range(0, len(out_summary), 5):
+                    logger.error(f"  配置节点: {', '.join(out_summary[i:i+5])}")
             except Exception:
                 pass
+            # 打印这批节点来自哪些源
+            src_counts = {}
+            for node, _ in nodes_with_ports:
+                s = node.get("source", "unknown")
+                src_counts[s] = src_counts.get(s, 0) + 1
+            logger.error(f"  本批节点源分布: {src_counts}")
             for idx, (node, _) in enumerate(nodes_with_ports):
                 if idx not in failed_indices:
                     results.append({
@@ -1361,11 +1383,11 @@ def _xray_test_batch(xray_bin, batch_nodes, batch_idx, total_batches, max_worker
 
 def batch_xray_test(xray_bin, candidate_nodes):
     """
-    分批多进程测速：将候选节点分成多批，每批启动一个 xray 进程。
-    避免单进程 inbounds 过多（500+）导致 xray 启动失败。
-    每批最多 BATCH_SIZE 个节点。
+    按源分批测速：将候选节点按 source 分组，每个源启动独立的 xray 进程。
+    这样如果某个源的节点数据有问题导致 xray 崩溃，可以精确定位到问题源。
+    每个源内部如果节点数超过 BATCH_SIZE，再按数量分批。
     """
-    BATCH_SIZE = 20  # 每批最多 20 个节点（GitHub Actions 环境 fd 有限）
+    BATCH_SIZE = 100  # 每批最多 100 个节点
     config = TEST_CONFIG
     total = len(candidate_nodes)
     max_workers = config.get("xray_max_workers", 20)
@@ -1373,10 +1395,18 @@ def batch_xray_test(xray_bin, candidate_nodes):
     timeout = config.get("xray_test_timeout", 10)
     startup_wait = config.get("xray_startup_wait", 2)
 
-    # 计算批次
-    num_batches = (total + BATCH_SIZE - 1) // BATCH_SIZE
-    logger.info(f"  xray 真实代理测速（分批模式）：{total} 个候选，分 {num_batches} 批（每批≤{BATCH_SIZE}），并发 {max_workers}")
+    # 按源分组
+    from collections import OrderedDict
+    source_groups = OrderedDict()
+    for node in candidate_nodes:
+        src = node.get("source", "unknown")
+        source_groups.setdefault(src, []).append(node)
+
+    num_sources = len(source_groups)
+    logger.info(f"  xray 真实代理测速（按源分批模式）：{total} 个候选，来自 {num_sources} 个源，并发 {max_workers}")
     logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
+    for src, nodes in source_groups.items():
+        logger.info(f"    [{src}] {len(nodes)} 个节点")
 
     # 获取本机公网 IP
     local_ip = get_local_ip()
@@ -1402,23 +1432,51 @@ def batch_xray_test(xray_bin, candidate_nodes):
     except Exception as ve:
         logger.error(f"  xray 二进制验证失败: {ve}")
 
-    # 分批执行
+    # 按源逐个测试
     all_results = []
-    for batch_idx in range(num_batches):
-        start = batch_idx * BATCH_SIZE
-        end = min(start + BATCH_SIZE, total)
-        batch_nodes = candidate_nodes[start:end]
-        logger.info(f"  [批次 {batch_idx+1}/{num_batches}] 测试节点 {start+1}-{end}（共 {len(batch_nodes)} 个）...")
+    batch_idx = 0
+    total_batches = sum((len(nodes) + BATCH_SIZE - 1) // BATCH_SIZE for nodes in source_groups.values())
 
-        batch_results = _xray_test_batch(
-            xray_bin, batch_nodes, batch_idx, num_batches,
-            max_workers, test_count, timeout, startup_wait, local_ip
-        )
-        all_results.extend(batch_results)
+    for src_name, src_nodes in source_groups.items():
+        src_total = len(src_nodes)
+        src_batches = (src_total + BATCH_SIZE - 1) // BATCH_SIZE
+        logger.info(f"\n  ▶ 测试源 [{src_name}]：{src_total} 个节点，{src_batches} 批")
 
-        # 批次间短暂等待，释放端口
-        if batch_idx < num_batches - 1:
-            time.sleep(1)
+        for sub_idx in range(src_batches):
+            start = sub_idx * BATCH_SIZE
+            end = min(start + BATCH_SIZE, src_total)
+            batch_nodes = src_nodes[start:end]
+            logger.info(f"    [{src_name}] 批次 {sub_idx+1}/{src_batches}，节点 {start+1}-{end}（共 {len(batch_nodes)} 个）")
+
+            batch_results = _xray_test_batch(
+                xray_bin, batch_nodes, batch_idx, total_batches,
+                max_workers, test_count, timeout, startup_wait, local_ip
+            )
+            all_results.extend(batch_results)
+            batch_idx += 1
+
+            # 统计本批结果
+            ok_count = sum(1 for r in batch_results if r.get("xray_ok"))
+            fail_count = len(batch_results) - ok_count
+            crashed = any(r.get("xray_error", "").startswith("xray_crashed") for r in batch_results)
+            if crashed:
+                logger.error(f"    ⚠ [{src_name}] 批次 {sub_idx+1} xray 启动崩溃！该源数据可能有问题")
+            else:
+                logger.info(f"    [{src_name}] 批次 {sub_idx+1} 完成：{ok_count} 可用 / {fail_count} 不可用")
+
+            # 批次间短暂等待，释放端口
+            if batch_idx < total_batches:
+                time.sleep(1)
+
+    # 汇总各源结果
+    logger.info(f"\n  === 各源 xray 测试汇总 ===")
+    for src_name in source_groups:
+        src_results = [r for r in all_results if r.get("source") == src_name]
+        ok = sum(1 for r in src_results if r.get("xray_ok"))
+        crashed = sum(1 for r in src_results if r.get("xray_error", "").startswith("xray_crashed"))
+        total_src = len(src_results)
+        status = "💥 崩溃" if crashed > 0 else ("✓" if ok > 0 else "✗ 全部失败")
+        logger.info(f"    [{src_name}] {status} - {ok}/{total_src} 可用" + (f"（{crashed} 个因崩溃标记失败）" if crashed else ""))
 
     return all_results
 
