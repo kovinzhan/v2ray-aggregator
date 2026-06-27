@@ -335,9 +335,9 @@ def parse_nodes(tagged_contents, day_offset=0):
     解析所有订阅内容为节点列表。
     参数：
         tagged_contents = [(source_name, raw_text), ...]
-        day_offset: 天数偏移（0=今天, -1=昨天, 1=明天）
-    每个节点的 name 格式为 "[day_offset][国家][源名称][IP:端口]"
-    如 "[0][美国][mibei77][1.1.1.1:443]" 或 "[-1][日本][v2raynode][2.2.2.2:8080]"
+        day_offset: 天数偏移（0=今天不写, -1=昨天, -2=前天）
+    当天节点 name 格式为 "[国家][源名称][IP:端口]"，如 "[美国][mibei77][1.1.1.1:443]"
+    历史节点加前缀如 "[-1][日本][v2raynode][2.2.2.2:8080]"
     返回：(nodes, per_source_node_counts)
         - nodes: 节点列表
         - per_source_node_counts: {source_name: node_count} 每源解析到的节点数
@@ -372,8 +372,11 @@ def parse_nodes(tagged_contents, day_offset=0):
                             addr_country = _extract_country_from_address(node["address"])
                             if addr_country:
                                 country = addr_country
-                        # 节点名称格式：[天数偏移][国家][源名称][IP:端口]
-                        node["name"] = f"[{day_offset}][{country}][{source_name}][{node['address']}:{node['port']}]"
+                        # 节点名称格式：[国家][源名称][IP:端口]，历史节点加 [-N] 前缀
+                        if day_offset == 0:
+                            node["name"] = f"[{country}][{source_name}][{node['address']}:{node['port']}]"
+                        else:
+                            node["name"] = f"[{day_offset}][{country}][{source_name}][{node['address']}:{node['port']}]"
                         node["source"] = source_name
                         node["country"] = country
                         # 同步更新 raw URI 中的名称（vmess 需要特殊处理）
@@ -425,6 +428,72 @@ def _rebuild_raw_with_name(node):
         pass  # 名称写回失败不影响节点本身
 
     return raw
+
+
+def _get_name_from_raw(raw_line):
+    """从原始 URI 中提取节点名称"""
+    try:
+        if raw_line.startswith("vmess://"):
+            decoded_json = json.loads(decode_base64(raw_line.replace("vmess://", "")))
+            return decoded_json.get("ps", "")
+        else:
+            # vless/trojan/ss: 名称在 #fragment
+            if "#" in raw_line:
+                return urllib.parse.unquote(raw_line.rsplit("#", 1)[1])
+    except Exception:
+        pass
+    return ""
+
+
+def _replace_day_offset_in_raw(raw_line, old_offset, new_offset):
+    """将 URI 中节点名称的 [old_offset] 替换为 [new_offset]"""
+    try:
+        if raw_line.startswith("vmess://"):
+            decoded_json = json.loads(decode_base64(raw_line.replace("vmess://", "")))
+            old_name = decoded_json.get("ps", "")
+            new_name = old_name.replace(f"[{old_offset}]", f"[{new_offset}]", 1)
+            decoded_json["ps"] = new_name
+            new_b64 = base64.b64encode(
+                json.dumps(decoded_json, ensure_ascii=False).encode("utf-8")
+            ).decode("utf-8")
+            return f"vmess://{new_b64}"
+        else:
+            if "#" in raw_line:
+                base_part, name_part = raw_line.rsplit("#", 1)
+                decoded_name = urllib.parse.unquote(name_part)
+                new_name = decoded_name.replace(f"[{old_offset}]", f"[{new_offset}]", 1)
+                return f"{base_part}#{urllib.parse.quote(new_name)}"
+    except Exception:
+        pass
+    return raw_line
+
+
+def _add_day_offset_to_raw(raw_line, offset):
+    """
+    在原始 URI 的节点名称部分添加天数偏移前缀 [offset]。
+    例如：名称 "[美国][mibei77][1.1.1.1:443]" → "[-1][美国][mibei77][1.1.1.1:443]"
+    """
+    try:
+        if raw_line.startswith("vmess://"):
+            # vmess: 名称在 base64 JSON 的 ps 字段
+            decoded_json = json.loads(decode_base64(raw_line.replace("vmess://", "")))
+            old_name = decoded_json.get("ps", "")
+            decoded_json["ps"] = f"[{offset}]{old_name}"
+            new_b64 = base64.b64encode(
+                json.dumps(decoded_json, ensure_ascii=False).encode("utf-8")
+            ).decode("utf-8")
+            return f"vmess://{new_b64}"
+        else:
+            # vless/trojan/ss: 名称在 #fragment
+            if "#" in raw_line:
+                base_part, name_part = raw_line.rsplit("#", 1)
+                decoded_name = urllib.parse.unquote(name_part)
+                new_name = f"[{offset}]{decoded_name}"
+                return f"{base_part}#{urllib.parse.quote(new_name)}"
+            else:
+                return raw_line
+    except Exception:
+        return raw_line
 
 
 def deduplicate_nodes(nodes):
@@ -1676,7 +1745,7 @@ def main():
                 f"{test_method:<5} {node.get('name', '')[:30]}"
             )
 
-    # 合并历史节点：读取上次的 best_nodes.txt，将其中节点标记为 [-1]
+    # 合并历史节点：[-N] 表示数据是 N 天前获取的，今天的无前缀，最多保留到 [-2]
     sub_file = output_dir / "best_nodes.txt"
     history_nodes = []
     if sub_file.exists() and best_nodes:
@@ -1689,15 +1758,27 @@ def main():
                         line = line.strip()
                         if not line:
                             continue
-                        # 将旧节点名称中的 [0] 改为 [-1]
-                        if "[0]" in line:
-                            line = line.replace("[0]", "[-1]", 1)
+                        # 从 URI 中提取节点名称，检查是否已有 [-N] 前缀
+                        node_name = _get_name_from_raw(line)
+                        match = re.match(r'^\[(-\d+)\]', node_name) if node_name else None
+                        if match:
+                            # 已经是历史节点，天数偏移再 -1
+                            old_offset = int(match.group(1))
+                            new_offset = old_offset - 1
+                            # 只保留 2 天历史（[-1] 和 [-2]），更早的丢弃
+                            if new_offset < -2:
+                                continue
+                            # 替换名称中的 [-N] 为新偏移
+                            line = _replace_day_offset_in_raw(line, old_offset, new_offset)
+                        else:
+                            # 当天节点（无 [-N] 前缀），标记为 [-1]
+                            line = _add_day_offset_to_raw(line, -1)
                         history_nodes.append(line)
-                    logger.info(f"  合并上次历史节点 {len(history_nodes)} 个（标记为 [-1]）")
+                    logger.info(f"  合并历史节点 {len(history_nodes)} 个")
         except Exception as e:
             logger.warning(f"  读取历史节点失败: {e}")
 
-    # 生成订阅文件（今天 [0] + 昨天 [-1]）
+    # 生成订阅文件（今天的 + 历史 [-1][-2]）
     today_lines = [node["raw"] for node in best_nodes]
     all_lines = today_lines + history_nodes
     sub_content = base64.b64encode("\n".join(all_lines).encode("utf-8")).decode("utf-8")
