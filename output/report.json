@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-27T08:31:05.793339",
+  "generated_at": "2026-06-27T08:35:27.775029",
   "test_config": {
     "rounds": 2,
     "pings_per_round": 3,
@@ -8,7 +8,7 @@
     "xray_enabled": true,
     "xray_test_count": 3
   },
-  "total_sources": 1,
+  "total_sources": 3,
   "source_details": [
     {
       "name": "clashnodefree",
@@ -16,11 +16,25 @@
       "content_count": 2,
       "node_count": 64,
       "error": ""
+    },
+    {
+      "name": "passwall",
+      "success": true,
+      "content_count": 7,
+      "node_count": 1014,
+      "error": ""
+    },
+    {
+      "name": "clashmeta",
+      "success": true,
+      "content_count": 8,
+      "node_count": 1014,
+      "error": ""
     }
   ],
-  "total_nodes_parsed": 64,
-  "unique_nodes": 20,
-  "tested_nodes": 20,
+  "total_nodes_parsed": 2092,
+  "unique_nodes": 622,
+  "tested_nodes": 622,
   "selected_nodes": 0,
   "best_nodes": []
 }
