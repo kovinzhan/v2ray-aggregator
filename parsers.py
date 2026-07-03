@@ -106,8 +106,8 @@ def parse_trojan(uri):
         return None
 
 
-def _rebuild_raw_with_name(node):
-    """重建 raw URI，将节点名称（含源标记）写回到 URI 中"""
+def rebuild_raw_with_name(node):
+    """重建 raw URI，将节点名称写回到 URI 中（公开接口）"""
     protocol = node["protocol"]
     raw = node["raw"]
     new_name = node["name"]
@@ -178,7 +178,7 @@ def parse_nodes(tagged_contents):
                         node["source"] = source_name
                         node["country"] = country
                         node["day_offset"] = day_offset
-                        node["raw"] = _rebuild_raw_with_name(node)
+                        node["raw"] = rebuild_raw_with_name(node)
                         nodes.append(node)
                         source_node_count += 1
                     break

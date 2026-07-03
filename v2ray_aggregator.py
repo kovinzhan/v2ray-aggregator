@@ -14,7 +14,7 @@ from pathlib import Path
 
 import sources as source_module
 
-from parsers import parse_nodes, deduplicate_nodes
+from parsers import parse_nodes, deduplicate_nodes, rebuild_raw_with_name
 from xray_config import ensure_xray_binary
 from speed_test import batch_test_nodes, batch_xray_test, batch_bandwidth_test
 
@@ -159,51 +159,15 @@ def main():
     if not best_nodes:
         logger.warning("未筛选到任何可用节点！将写入失败提示假节点。")
 
-    # ---- 输出 v1：按延迟排序 ----
-    best_nodes.sort(key=lambda n: n.get("xray_avg_ms", float("inf")))
-
-    logger.info(f"\n{'='*80}")
-    logger.info(f"[v1] 可用 {len(best_nodes)} 个节点（按延迟排序）：")
-    if best_nodes:
-        logger.info(f"{'序号':<4} {'协议':<7} {'地址':<30} {'延迟(ms)':<10} {'出口IP':<18} {'名称'}")
-        logger.info(f"{'-'*90}")
-        for i, node in enumerate(best_nodes, 1):
-            xray_avg = node.get("xray_avg_ms", "-")
-            exit_ip = node.get("exit_ip", "-")
-            logger.info(
-                f"{i:<4} {node['protocol']:<7} {node['address']}:{node['port']:<20} "
-                f"{xray_avg:<10} {exit_ip:<18} {node.get('name', '')[:30]}"
-            )
-
-    sub_file = output_dir / "best_nodes.txt"
-
-    # 如果没有可用节点，生成假节点提示任务失败，方便手机端更新时感知异常
-    if not best_nodes:
-        import time
-        fail_time = time.strftime("%m-%d %H:%M")
-        fake_node_name = f"⚠️采集失败-{fail_time}-请稍后重试"
-        # 构造一个无效的 trojan 链接作为假节点，不会真正连接
-        fake_raw = f"trojan://fake@127.0.0.1:1#{fake_node_name}"
-        sub_content = base64.b64encode(fake_raw.encode("utf-8")).decode("utf-8")
-    else:
-        sub_content = base64.b64encode(
-            "\n".join(node["raw"] for node in best_nodes).encode("utf-8")
-        ).decode("utf-8")
-
-    sub_file.write_text(sub_content, encoding="utf-8")
-
-    logger.info(f"\n[v1] 输出文件: {sub_file}")
-    logger.info(f"[v1] 完成！共 {len(best_nodes)} 个可用节点（延迟排序，已发布）。")
-
-    # ---- 阶段二：带宽测速 + v2 ----
+    # ---- 带宽测速 ----
     if best_nodes and TEST_CONFIG.get("bandwidth_test_enabled"):
         logger.info(f"\n{'='*80}")
-        logger.info("[v2] 带宽测速（异步优化，不影响 v1 可用性）")
+        logger.info("[带宽测速] 测试所有可用节点的下载带宽...")
         try:
             xray_bin = ensure_xray_binary()
             best_nodes = batch_bandwidth_test(xray_bin, best_nodes, TEST_CONFIG)
 
-            # 按带宽降序排序
+            # 按带宽降序排序（带宽相同则按延迟升序）
             best_nodes.sort(
                 key=lambda n: (
                     0 if n.get("download_mbps", 0) > 0 else 1,
@@ -212,11 +176,8 @@ def main():
                 )
             )
 
-            # 输出 v2 结果
-            logger.info(f"\n{'='*80}")
-            logger.info(f"[v2] 带宽测速完成，按带宽排序：")
             bw_nodes = [n for n in best_nodes if n.get("download_mbps", 0) > 0]
-            logger.info(f"  测出带宽: {len(bw_nodes)}/{len(best_nodes)} 个节点")
+            logger.info(f"\n  带宽测速完成: {len(bw_nodes)}/{len(best_nodes)} 个节点测出带宽")
             if bw_nodes:
                 logger.info(f"{'序号':<4} {'协议':<7} {'地址':<30} {'带宽(Mbps)':<12} {'延迟(ms)':<10} {'名称'}")
                 logger.info(f"{'-'*100}")
@@ -227,21 +188,43 @@ def main():
                         f"{node.get('name', '')[:30]}"
                     )
 
-            # 覆盖发布 v2
-            sub_content = base64.b64encode(
-                "\n".join(node["raw"] for node in best_nodes).encode("utf-8")
-            ).decode("utf-8")
-            sub_file.write_text(sub_content, encoding="utf-8")
-
-            logger.info(f"\n[v2] 输出文件已更新: {sub_file}")
-            logger.info(f"[v2] 完成！共 {len(best_nodes)} 个节点（按带宽排序，已覆盖发布）。")
-
         except Exception as e:
-            logger.error(f"[v2] 带宽测速失败: {e}")
-            logger.info("[v2] v1 结果不受影响。")
+            logger.error(f"带宽测速失败: {e}")
+            logger.info("带宽测速异常，将使用延迟排序结果输出。")
     else:
         if best_nodes:
-            logger.info("\n  带宽测速已禁用，跳过阶段二。")
+            logger.info("\n  带宽测速已禁用，跳过。")
+            best_nodes.sort(key=lambda n: n.get("xray_avg_ms", float("inf")))
+
+    # ---- 最终输出 ----
+    # 将带宽信息追加到节点名称中，方便手机端直接看到带宽
+    for node in best_nodes:
+        bw = node.get("download_mbps", 0)
+        if bw > 0:
+            node["name"] = f"{node['name']} | {bw:.1f}Mbps"
+        else:
+            node["name"] = f"{node['name']} | 带宽未测"
+        node["raw"] = rebuild_raw_with_name(node)
+
+    sub_file = output_dir / "best_nodes.txt"
+
+    # 如果没有可用节点，生成假节点提示任务失败，方便手机端更新时感知异常
+    if not best_nodes:
+        import time
+        fail_time = time.strftime("%m-%d %H:%M")
+        fake_node_name = f"⚠️采集失败-{fail_time}-请稍后重试"
+        fake_raw = f"trojan://fake@127.0.0.1:1#{fake_node_name}"
+        sub_content = base64.b64encode(fake_raw.encode("utf-8")).decode("utf-8")
+    else:
+        sub_content = base64.b64encode(
+            "\n".join(node["raw"] for node in best_nodes).encode("utf-8")
+        ).decode("utf-8")
+
+    sub_file.write_text(sub_content, encoding="utf-8")
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"输出文件: {sub_file}")
+    logger.info(f"完成！共 {len(best_nodes)} 个可用节点（带宽排序，名称含带宽信息）。")
 
 
 if __name__ == "__main__":
