@@ -198,12 +198,12 @@ def main():
 
     # ---- 最终输出 ----
     # 带宽测速为0不代表节点不可用（可能只是测速服务器不可达），保留所有节点
-    # 测出带宽的节点名称加前缀: [12.5Mbps][国家][源][地址:端口]
+    # 测出带宽的节点名称加前缀: [12.5M][国家][源]
     # 未测出的节点名称不变，排在后面
     for node in best_nodes:
         bw = node.get("download_mbps", 0)
         if bw > 0:
-            node["name"] = f"[{bw:.1f}Mbps]{node['name']}"
+            node["name"] = f"[{bw:.1f}M]{node['name']}"
             node["raw"] = rebuild_raw_with_name(node)
 
     sub_file = output_dir / "best_nodes.txt"

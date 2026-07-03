@@ -4,6 +4,7 @@
 
 import json
 import base64
+import logging
 import urllib.parse
 from datetime import date
 
@@ -170,11 +171,16 @@ def parse_nodes(tagged_contents):
                 if line.startswith(prefix):
                     node = parser(line)
                     if node and node["address"] and node["port"]:
-                        country = extract_country(node.get("name", ""))
+                        original_name = node.get("name", "")
+                        country = extract_country(original_name)
+                        if country == "未知":
+                            logging.getLogger(__name__).warning(
+                                f"无法识别地区，原节点名: {original_name}"
+                            )
                         if day_offset == 0:
-                            node["name"] = f"[{country}][{source_name}][{node['address']}:{node['port']}]"
+                            node["name"] = f"[{country}][{source_name}]"
                         else:
-                            node["name"] = f"[{day_offset}][{country}][{source_name}][{node['address']}:{node['port']}]"
+                            node["name"] = f"[{day_offset}][{country}][{source_name}]"
                         node["source"] = source_name
                         node["country"] = country
                         node["day_offset"] = day_offset
