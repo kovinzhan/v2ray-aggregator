@@ -332,17 +332,20 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10, local_ip=Non
     }
 
 
-def batch_xray_test(xray_bin, candidate_nodes, config):
+def batch_xray_test(xray_bin, candidate_nodes, config, _is_retry=False):
     """
     单进程多节点并发测速：使用公共上下文管理器统一管理 xray 进程。
+    支持失败重试：第一轮测完后，对失败节点自动重试一轮。
     """
     total = len(candidate_nodes)
     max_workers = config.get("xray_max_workers", 100)
     test_count = config.get("xray_test_count", 2)
     timeout = config.get("xray_test_timeout", 8)
     startup_wait = config.get("xray_startup_wait", 2)
+    retry_enabled = config.get("xray_retry_failed", True)
 
-    logger.info(f"  xray 真实代理测速（单进程模式）：{total} 个候选，并发 {max_workers}")
+    label = "proxy_test_retry" if _is_retry else "proxy_test"
+    logger.info(f"  xray 真实代理测速（{'重试' if _is_retry else '首轮'}）：{total} 个候选，并发 {max_workers}")
     logger.info(f"  每节点 {test_count} 次请求，超时 {timeout}s")
 
     # 获取本机公网 IP
@@ -378,7 +381,7 @@ def batch_xray_test(xray_bin, candidate_nodes, config):
 
     # 使用上下文管理器启动 xray
     with xray_process_context(xray_bin, xray_config, nodes_with_ports, failed_indices,
-                              startup_wait=startup_wait, label="proxy_test") as proc_info:
+                              startup_wait=startup_wait, label=label) as proc_info:
         if proc_info is None:
             results.extend(_xray_fail(node, "xray_start_failed")
                           for idx, (node, _) in enumerate(nodes_with_ports) if idx not in failed_indices)
@@ -418,6 +421,20 @@ def batch_xray_test(xray_bin, candidate_nodes, config):
                     logger.warning(f"  [{done_count}/{len(testable)}] 测试异常: {e}")
 
     logger.info(f"  xray 测速完成，共 {len(results)} 个结果")
+
+    # 失败节点重试一轮（避免偶发网络抖动误杀）
+    if retry_enabled and not _is_retry:
+        failed_nodes = [r for r in results if not r.get("xray_ok")]
+        if failed_nodes:
+            logger.info(f"\n  对 {len(failed_nodes)} 个失败节点重试一轮...")
+            retry_results = batch_xray_test(xray_bin, failed_nodes, config, _is_retry=True)
+            # 用重试结果替换失败结果
+            retry_ok = [r for r in retry_results if r.get("xray_ok")]
+            if retry_ok:
+                logger.info(f"  重试挽回 {len(retry_ok)} 个节点")
+                retry_map = {r["uid"]: r for r in retry_results}
+                results = [retry_map.get(r["uid"], r) if not r.get("xray_ok") else r for r in results]
+
     return results
 
 

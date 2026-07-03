@@ -23,15 +23,16 @@ from speed_test import batch_test_nodes, batch_xray_test, batch_bandwidth_test
 # ============================================================
 
 TEST_CONFIG = {
-    "tcp_ping_count": 2,        # 每个节点 TCP ping 次数
+    "tcp_ping_count": 3,        # 每个节点 TCP ping 次数（3次只要1次通就保留）
     "tcp_ping_timeout": 3,      # 单次超时（秒）
     "max_workers": 500,         # 并发测试线程数
     "max_latency_ms": 2000,     # 最大可接受延迟（ms）
     # xray-core 真实代理测速配置
-    "xray_test_count": 2,       # 每个节点通过代理请求次数
+    "xray_test_count": 3,       # 每个节点通过代理请求次数（3次只要1次通就过）
     "xray_test_timeout": 8,     # 代理请求超时（秒）
     "xray_startup_wait": 2,     # xray 进程启动等待（秒）
     "xray_max_workers": 100,    # xray 测试并发数
+    "xray_retry_failed": True,  # 对失败的节点重试一轮
     # 带宽测速配置
     "bandwidth_test_enabled": True,
     "bandwidth_download_bytes": 2 * 1024 * 1024,  # 2MB
@@ -58,7 +59,7 @@ def main():
     parser = argparse.ArgumentParser(description="V2Ray 订阅聚合 - 采集/去重/真实测速/筛选")
     parser.add_argument("--workers", type=int, default=TEST_CONFIG["max_workers"], help="并发线程数")
     parser.add_argument("--output", type=str, default=None, help="输出目录")
-    parser.add_argument("--ping-count", type=int, default=TEST_CONFIG["tcp_ping_count"], help="每节点ping次数")
+    parser.add_argument("--ping-count", type=int, default=TEST_CONFIG["tcp_ping_count"], help="每节点ping次数(3次只要1次通就保留)")
     parser.add_argument("--timeout", type=int, default=TEST_CONFIG["tcp_ping_timeout"], help="单次超时秒数")
     parser.add_argument("--verbose", "-v", action="store_true", help="显示详细日志")
     args = parser.parse_args()
