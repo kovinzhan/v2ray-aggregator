@@ -65,19 +65,6 @@ COUNTRIES = {
     "欧盟": ["欧盟", "歐盟", "EU"],
 }
 
-# 国旗 emoji 映射
-FLAG_MAP = {
-    "🇺🇸": "美国", "🇭🇰": "香港", "🇹🇼": "台湾", "🇯🇵": "日本",
-    "🇰🇷": "韩国", "🇸🇬": "新加坡", "🇬🇧": "英国", "🇩🇪": "德国",
-    "🇫🇷": "法国", "🇨🇦": "加拿大", "🇦🇺": "澳大利亚", "🇮🇳": "印度",
-    "🇷🇺": "俄罗斯", "🇳🇱": "荷兰", "🇧🇷": "巴西", "🇹🇷": "土耳其",
-    "🇦🇷": "阿根廷", "🇻🇳": "越南", "🇹🇭": "泰国", "🇲🇾": "马来西亚",
-    "🇮🇩": "印尼", "🇵🇭": "菲律宾", "🇮🇹": "意大利", "🇪🇸": "西班牙",
-    "🇨🇭": "瑞士", "🇸🇪": "瑞典", "🇳🇴": "挪威", "🇫🇮": "芬兰",
-    "🇵🇱": "波兰", "🇺🇦": "乌克兰", "🇮🇱": "以色列", "🇿🇦": "南非",
-    "🇲🇽": "墨西哥",
-}
-
 # ============================================================
 # 构建查找索引（模块加载时一次性完成）
 # ============================================================
@@ -88,8 +75,11 @@ _ALIASES_SORTED = sorted(
     reverse=True,
 )
 
-# 2字母代码单独提取（需在开头且后接分隔符才匹配，避免误匹配）
-_TWO_LETTER_CODES = [a for a, _ in _ALIASES_SORTED if len(a) == 2 and a.isalpha() and a.isupper()]
+# 2字母代码 → 国家 的查找表（需在开头且后接分隔符才匹配，避免误匹配）
+_TWO_LETTER_MAP = {
+    a: c for a, c in _ALIASES_SORTED
+    if len(a) == 2 and a.isalpha() and a.isupper()
+}
 
 
 def extract_country(original_name):
@@ -97,20 +87,15 @@ def extract_country(original_name):
     if not original_name:
         return "未知"
 
-    # 先检查国旗 emoji
-    for flag, country in FLAG_MAP.items():
-        if flag in original_name:
-            return country
-
     # 按长度降序匹配别名（长关键词优先，避免短词误匹配）
     for alias, country in _ALIASES_SORTED:
-        if len(alias) >= 2 and alias in original_name:
+        if alias in original_name:
             return country
 
     # 匹配2字母国家代码（需在开头且后接分隔符）
     name_upper = original_name.upper()
-    for code in _TWO_LETTER_CODES:
+    for code, country in _TWO_LETTER_MAP.items():
         if re.match(rf'^{code}(?=[\W_]|$)', name_upper):
-            return dict(_ALIASES_SORTED)[code]
+            return country
 
     return "未知"
