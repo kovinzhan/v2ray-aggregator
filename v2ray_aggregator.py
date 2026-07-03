@@ -178,10 +178,12 @@ def main():
 
             bw_nodes = [n for n in best_nodes if n.get("download_mbps", 0) > 0]
             logger.info(f"\n  带宽测速完成: {len(bw_nodes)}/{len(best_nodes)} 个节点测出带宽")
-            if bw_nodes:
+            # 过滤掉带宽测速失败的节点，只保留有效的
+            best_nodes = bw_nodes
+            if best_nodes:
                 logger.info(f"{'序号':<4} {'协议':<7} {'地址':<30} {'带宽(Mbps)':<12} {'延迟(ms)':<10} {'名称'}")
                 logger.info(f"{'-'*100}")
-                for i, node in enumerate(bw_nodes[:30], 1):
+                for i, node in enumerate(best_nodes[:30], 1):
                     logger.info(
                         f"{i:<4} {node['protocol']:<7} {node['address']}:{node['port']:<20} "
                         f"{node.get('download_mbps', 0):<12} {node.get('xray_avg_ms', '-'):<10} "
@@ -197,14 +199,13 @@ def main():
             best_nodes.sort(key=lambda n: n.get("xray_avg_ms", float("inf")))
 
     # ---- 最终输出 ----
-    # 将带宽信息追加到节点名称中，方便手机端直接看到带宽
+    # 带宽测速成功时，过滤掉带宽为0的节点，只保留有效的
+    # 将带宽信息插入节点名称最前面（国家之前），格式: [12.5Mbps][国家][源][地址:端口]
     for node in best_nodes:
         bw = node.get("download_mbps", 0)
         if bw > 0:
-            node["name"] = f"{node['name']} | {bw:.1f}Mbps"
-        else:
-            node["name"] = f"{node['name']} | 带宽未测"
-        node["raw"] = rebuild_raw_with_name(node)
+            node["name"] = f"[{bw:.1f}Mbps]{node['name']}"
+            node["raw"] = rebuild_raw_with_name(node)
 
     sub_file = output_dir / "best_nodes.txt"
 
