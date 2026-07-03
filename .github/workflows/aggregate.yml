@@ -34,7 +34,6 @@ jobs:
           python v2ray_aggregator.py \
             --workers 30 \
             --ping-count 3 \
-            --rounds 2 \
             --verbose
 
       - name: Commit and push results
