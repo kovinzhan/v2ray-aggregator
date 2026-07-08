@@ -76,15 +76,12 @@ def ensure_xray_binary():
 _SUPPORTED_NETWORKS = {"tcp", "ws", "grpc", "kcp", "quic",
                        "httpupgrade", "splithttp", "xhttp"}
 
-# SS 合法加密方法
+# SS 合法加密方法（xray 25.x 仅支持 AEAD 系列，已移除不安全的旧算法）
 _VALID_SS_METHODS = {
     "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305",
     "chacha20-ietf-poly1305", "xchacha20-poly1305",
     "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm",
     "2022-blake3-chacha20-poly1305",
-    "aes-128-cfb", "aes-192-cfb", "aes-256-cfb",
-    "aes-128-ctr", "aes-192-ctr", "aes-256-ctr",
-    "rc4-md5", "chacha20", "chacha20-ietf",
     "none", "plain",
 }
 

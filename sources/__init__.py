@@ -15,6 +15,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
 
+# 可选：curl_cffi 提供 Chrome 等浏览器的 TLS 指纹伪装，用于绕过 Cloudflare 等 WAF
+try:
+    from curl_cffi import requests as curl_requests
+    HAS_CURL_CFFI = True
+except Exception:
+    curl_requests = None
+    HAS_CURL_CFFI = False
+
+
 logger = logging.getLogger(__name__)
 
 HEADERS = {
@@ -89,6 +98,27 @@ class BaseSource(ABC):
     def http_get_text(self, url, timeout=30, **kwargs) -> str:
         """GET 请求并返回文本"""
         return self.http_get(url, timeout=timeout, **kwargs).text.strip()
+
+    def http_get_impersonate(self, url, timeout=30, impersonate="chrome120", **kwargs):
+        """
+        使用 Chrome 等浏览器的 TLS 指纹发起 GET 请求，绕过 Cloudflare 等 WAF。
+        若未安装 curl_cffi，则自动回退到普通 requests。
+        """
+        if not HAS_CURL_CFFI:
+            logger.debug("curl_cffi 未安装，回退到普通 requests")
+            return self.http_get(url, timeout=timeout, **kwargs)
+        headers = kwargs.pop("headers", HEADERS)
+        resp = curl_requests.get(
+            url, headers=headers, timeout=timeout, impersonate=impersonate, **kwargs
+        )
+        resp.raise_for_status()
+        return resp
+
+    def http_get_text_impersonate(self, url, timeout=30, impersonate="chrome120", **kwargs) -> str:
+        """使用 Chrome 指纹的 GET 请求，返回文本"""
+        return self.http_get_impersonate(
+            url, timeout=timeout, impersonate=impersonate, **kwargs
+        ).text.strip()
 
 
 # ============================================================

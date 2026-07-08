@@ -1,2 +1,5 @@
 requests>=2.28.0
 PySocks>=1.7.1
+
+# 可选：用于绕过 Cloudflare 等 WAF 的 TLS 指纹拦截（v2nodes 等源需要）
+curl_cffi>=0.7.0
