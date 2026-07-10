@@ -14,6 +14,7 @@ from . import BaseSource, register
 @register
 class V2RayNewsSource(BaseSource):
     name = "v2raynews"
+    enabled = False  # 已归档禁用
 
     CATEGORY_URL = "https://v2raynews.org/index.php/category/%E5%85%8D%E8%B4%B9%E8%8A%82%E7%82%B9/"
 

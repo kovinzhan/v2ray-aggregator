@@ -12,6 +12,7 @@ from . import BaseSource, register
 @register
 class OpenProxyListSource(BaseSource):
     name = "openproxylist"
+    enabled = False  # 已归档禁用
 
     RAW_LIST_URL = "https://openproxylist.com/v2ray/rawlist/text"
 

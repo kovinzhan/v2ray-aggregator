@@ -16,6 +16,7 @@ from . import BaseSource, register
 @register
 class FreeNodeOsbootingSource(BaseSource):
     name = "freenode_osbooting"
+    enabled = False  # 已归档禁用
 
     BASE_URL = "https://freenode.osbooting.com/"
 

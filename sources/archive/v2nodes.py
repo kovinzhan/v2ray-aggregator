@@ -13,6 +13,7 @@ from . import BaseSource, register
 @register
 class V2NodesSource(BaseSource):
     name = "v2nodes"
+    enabled = False  # 已归档禁用
 
     BASE_URL = "https://www.v2nodes.com"
 
