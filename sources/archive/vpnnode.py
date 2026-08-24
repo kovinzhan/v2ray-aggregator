@@ -16,6 +16,9 @@ from . import BaseSource, register
 @register
 class VpnNodeSource(BaseSource):
     name = "vpnnode"
+    # 已归档禁用：2026-08 起发布大规模批量伪造假节点
+    # （以 www.speedtest.net / time.is / support.zoom.us 等真实网站冒充代理服务器）
+    enabled = False
 
     LIST_URL = "https://vpnnode.net/free-node/"
 
