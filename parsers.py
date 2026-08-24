@@ -159,9 +159,14 @@ def parse_nodes(tagged_contents):
         except (ValueError, TypeError):
             day_offset = 0
 
-        decoded = decode_base64(content)
-        if not decoded:
+        # 明文节点链接直接使用（base64 字母表不含 ":"，出现 "://" 必为明文），
+        # 避免明文内容碰巧通过 base64 解码被解成乱码
+        if "://" in content:
             decoded = content
+        else:
+            decoded = decode_base64(content)
+            if not decoded:
+                decoded = content
 
         for line in decoded.splitlines():
             line = line.strip()

@@ -256,6 +256,7 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10, local_ip=Non
 
     # 阶段 0: 出口 IP 验证
     exit_ip = None
+    last_err = "no_response"
     for url in _IP_CHECK_URLS:
         try:
             resp = requests.get(url, proxies=proxies, timeout=timeout, headers=HEADERS)
@@ -264,11 +265,15 @@ def xray_test_via_proxy(node, socks_port, test_count=3, timeout=10, local_ip=Non
                 if exit_ip and len(exit_ip) < 50:
                     break
                 exit_ip = None
-        except Exception:
+                last_err = "invalid_body"
+            else:
+                last_err = f"http_{resp.status_code}"
+        except Exception as e:
+            last_err = type(e).__name__
             continue
 
     if not exit_ip:
-        return _xray_fail(node, "exit_ip_check_failed")
+        return _xray_fail(node, f"exit_ip_check_failed({last_err})")
     if local_ip and exit_ip == local_ip:
         return _xray_fail(node, f"proxy_bypass_detected(exit_ip={exit_ip}==local_ip)")
 

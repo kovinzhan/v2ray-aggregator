@@ -76,6 +76,15 @@ def ensure_xray_binary():
 _SUPPORTED_NETWORKS = {"tcp", "ws", "grpc", "kcp", "quic",
                        "httpupgrade", "splithttp", "xhttp"}
 
+# VLESS 合法 flow（xray 25.x 白名单；垃圾源伪造乱值会导致整个配置加载失败 exit=23）
+_VALID_VLESS_FLOWS = {"", "xtls-rprx-vision"}
+
+# vmess 合法加密方式（xray 25.x 白名单，旧 CFB 系列已移除）
+_VALID_VMESS_SECURITY = {
+    "auto", "none", "zero",
+    "aes-128-gcm", "chacha20-poly1305", "xchacha20-poly1305",
+}
+
 # SS 合法加密方法（xray 25.x 仅支持 AEAD 系列，已移除不安全的旧算法）
 _VALID_SS_METHODS = {
     "aes-128-gcm", "aes-256-gcm", "chacha20-poly1305",
@@ -147,6 +156,16 @@ def build_xray_outbound(node, tag="proxy"):
             logger.debug(f"  跳过不支持的传输协议: {net} ({address}:{port})")
             return None
 
+        scy = decoded.get("scy", "auto") or "auto"
+        if scy not in _VALID_VMESS_SECURITY:
+            logger.debug(f"  跳过 vmess 节点（不支持的加密方式 '{scy}'）: {address}:{port}")
+            return None
+
+        try:
+            alter_id = int(decoded.get("aid", 0) or 0)
+        except (TypeError, ValueError):
+            alter_id = 0
+
         stream = _build_stream_settings(net, decoded, address)
         if decoded.get("tls", "") == "tls":
             _apply_tls_settings(stream, decoded, address)
@@ -155,8 +174,8 @@ def build_xray_outbound(node, tag="proxy"):
             "tag": tag, "protocol": "vmess",
             "settings": {"vnext": [{"address": address, "port": port, "users": [{
                 "id": decoded.get("id", ""),
-                "alterId": int(decoded.get("aid", 0)),
-                "security": decoded.get("scy", "auto"),
+                "alterId": alter_id,
+                "security": scy,
             }]}]},
             "streamSettings": stream,
         }
@@ -196,7 +215,11 @@ def build_xray_outbound(node, tag="proxy"):
         if protocol == "vless":
             user = {"id": parsed.username or "", "encryption": "none"}
             flow = params.get("flow", "")
-            if flow:
+            if flow and flow not in _VALID_VLESS_FLOWS:
+                logger.debug(f"  跳过 VLESS 节点（非法 flow '{flow}'）: {address}:{port}")
+                return None
+            # flow 仅在 TLS/REALITY 传输下有效，避免 xray 配置校验失败
+            if flow and stream.get("security") in ("tls", "reality"):
                 user["flow"] = flow
             outbound = {
                 "tag": tag, "protocol": "vless",
