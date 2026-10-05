@@ -1,0 +1,13 @@
+exit_code: 23
+label: proxy_test
+
+=== STDOUT ===
+Xray 25.10.15 (Xray, Penetrates Everything.) b69a376 (go1.25.3 linux/amd64)
+A unified platform for anti-censorship.
+2026/10/05 23:56:35.799807 [Info] infra/conf/serial: Reading config: &{Name:/tmp/xray_proxy_test_vqusbcdk/config.json Format:json}
+2026/10/05 23:56:35.870050 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+Failed to start: main: failed to load config files: [/tmp/xray_proxy_test_vqusbcdk/config.json] > infra/conf: failed to build outbound config with tag out-152 > infra/conf: failed to build stream settings for outbound detour > infra/conf: REALITY only supports RAW, XHTTP and gRPC for now.
+
+
+=== STDERR ===
+
