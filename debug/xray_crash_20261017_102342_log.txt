@@ -1,0 +1,29 @@
+exit_code: 23
+label: proxy_test
+
+=== STDOUT ===
+Xray 25.10.15 (Xray, Penetrates Everything.) b69a376 (go1.25.3 linux/amd64)
+A unified platform for anti-censorship.
+2026/10/17 10:23:41.772441 [Info] infra/conf/serial: Reading config: &{Name:/tmp/xray_proxy_test_rthrx0an/config.json Format:json}
+2026/10/17 10:23:41.861612 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.861833 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.861837 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.861990 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862099 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862189 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862341 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862344 [Warning] common/errors: This feature gRPC transport (with unnecessary costs, etc.) is deprecated and being migrated to XHTTP stream-up H2. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862474 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862477 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862480 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862482 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862662 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862815 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862818 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862821 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+2026/10/17 10:23:41.862826 [Warning] common/errors: This feature WebSocket transport (with ALPN http/1.1, etc.) is deprecated and being migrated to XHTTP H2 & H3. Please update your config(s) according to release note and documentation before removal.
+Failed to start: main: failed to load config files: [/tmp/xray_proxy_test_rthrx0an/config.json] > infra/conf: failed to build outbound config with tag out-163 > infra/conf: failed to build stream settings for outbound detour > infra/conf: REALITY only supports RAW, XHTTP and gRPC for now.
+
+
+=== STDERR ===
+
